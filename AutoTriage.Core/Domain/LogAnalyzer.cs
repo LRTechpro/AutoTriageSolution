@@ -1,94 +1,122 @@
 ﻿using System;
+using System.Collections.Generic;
+using System.Linq;
 
 namespace AutoTriage.Core
 {
-    /// <summary>
-    /// Provides functionality for analyzing raw log text and converting it
-    /// into structured analysis results that can be consumed by a GUI.
-    /// </summary>
     public class LogAnalyzer
     {
-        /// <summary>
-        /// Analyzes raw log text line-by-line and extracts structured findings.
-        /// </summary>
-        /// <param name="logText">
-        /// The raw log text to analyze. Each line is evaluated independently.
-        /// </param>
-        /// <returns>
-        /// An AnalysisResult object containing summary statistics and findings.
-        /// </returns>
-        /// <exception cref="ArgumentException">
-        /// Thrown when the provided log text is null or empty.
-        /// </exception>
-        public AnalysisResult Analyze(string logText)
+        public AnalysisResult Analyze(IReadOnlyList<string> lines)
         {
-            // Guard clause to ensure valid input is provided to the analyzer.
-            if (string.IsNullOrWhiteSpace(logText))
-                throw new ArgumentException("Log text cannot be empty.");
-
-            // Initialize the result object that will be populated during analysis.
             var result = new AnalysisResult();
 
-            // Split the log into individual lines for processing.
-            string[] lines = logText.Split(
-                new[] { "\r\n", "\n" },
-                StringSplitOptions.None
-            );
+            // 1) Load the Critical Findings rules
+            var rules = CriticalRuleSet.Build();
 
-            result.TotalLines = lines.Length;
+            // 2) Apply rules to lines and emit findings
+            ApplyCriticalRules(lines, rules, result);
 
-            // Process each log line sequentially.
-            for (int i = 0; i < lines.Length; i++)
+            return result;
+        }
+
+        private static void ApplyCriticalRules(
+            IReadOnlyList<string> lines,
+            List<CriticalRule> rules,
+            AnalysisResult result)
+        {
+            // Defensive checks
+            if (lines == null || lines.Count == 0) return;
+            if (rules == null || rules.Count == 0) return;
+
+            // Track every matched line index per rule so we can do clustering
+            // Example: "3 timeouts within 250 lines" -> one Critical finding
+            var hitsByRule = new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase);
+
+            // STEP A: Find raw hits (rule matches line)
+            for (int i = 0; i < lines.Count; i++)
             {
-                string line = lines[i];
-                string upper = line.ToUpperInvariant();
+                var line = lines[i] ?? string.Empty;
 
-                // Determine severity based on keyword matching.
-                if (upper.Contains("ERROR") || upper.Contains("FAIL"))
+                foreach (var rule in rules)
                 {
-                    result.ErrorCount++;
-
-                    result.Findings.Add(new Finding
+                    if (rule.IsMatch(line))
                     {
-                        LineNumber = i + 1,
-                        Severity = FindingSeverity.Error,
-                        Code = "E-LOG",
-                        Message = line
-                    });
-                }
-                else if (upper.Contains("WARN"))
-                {
-                    result.WarningCount++;
+                        if (!hitsByRule.TryGetValue(rule.RuleId, out var list))
+                        {
+                            list = new List<int>();
+                            hitsByRule[rule.RuleId] = list;
+                        }
 
-                    result.Findings.Add(new Finding
-                    {
-                        LineNumber = i + 1,
-                        Severity = FindingSeverity.Warning,
-                        Code = "W-LOG",
-                        Message = line
-                    });
-                }
-                else if (upper.Contains("SUCCESS") || upper.Contains("COMPLETE"))
-                {
-                    result.SuccessCount++;
-
-                    result.Findings.Add(new Finding
-                    {
-                        LineNumber = i + 1,
-                        Severity = FindingSeverity.Success,
-                        Code = "S-LOG",
-                        Message = line
-                    });
+                        list.Add(i);
+                    }
                 }
             }
 
-            // Calculate a simple health score based on detected issues.
-            result.Score = Math.Max(
-                0,
-                100 - (result.ErrorCount * 15) - (result.WarningCount * 5)
-            );
+            // STEP B: Emit findings (single-hit or clustered)
+            foreach (var rule in rules)
+            {
+                if (!hitsByRule.TryGetValue(rule.RuleId, out var hitLines) || hitLines.Count == 0)
+                    continue;
 
-            return result;
+                int minHits = Math.Max(1, rule.MinHitsInWindow);
+                int window = Math.Max(1, rule.WindowLines);
+
+                // Case 1: single-hit rule -> emit a finding for each match
+                if (minHits <= 1 || window <= 1)
+                {
+                    foreach (var idx in hitLines)
+                    {
+                        result.Findings.Add(new Finding
+                        {
+                            RuleId = rule.RuleId,
+                            Code = rule.FindingCode,
+                            Severity = rule.Severity,
+                            Title = rule.Title,
+                            WhyItMatters = rule.WhyItMatters,
+                            LineNumber = idx + 1, // convert to 1-based
+                            LineText = lines[idx] ?? string.Empty
+                        });
+                    }
+                    continue;
+                }
+
+                // Case 2: clustered rule -> emit ONE finding once threshold is met
+                int start = 0;
+                for (int end = 0; end < hitLines.Count; end++)
+                {
+                    while (hitLines[end] - hitLines[start] >= window)
+                        start++;
+
+                    int count = end - start + 1;
+                    if (count >= minHits)
+                    {
+                        int anchor = hitLines[start];
+
+                        result.Findings.Add(new Finding
+                        {
+                            RuleId = rule.RuleId,
+                            Code = rule.FindingCode,
+                            Severity = rule.Severity,
+                            Title = rule.Title,
+                            WhyItMatters = rule.WhyItMatters,
+                            LineNumber = anchor + 1,
+                            LineText = lines[anchor] ?? string.Empty,
+                            Evidence = $"Hits={count} within {window} lines"
+                        });
+
+                        // One alert per rule (keeps reports readable)
+                        break;
+                    }
+                }
+            }
+
+            // Optional: sort so Critical is shown first, then by line number
+            result.Findings.Sort((a, b) =>
+            {
+                int sev = b.Severity.CompareTo(a.Severity);
+                if (sev != 0) return sev;
+                return a.LineNumber.CompareTo(b.LineNumber);
+            });
         }
     }
 }

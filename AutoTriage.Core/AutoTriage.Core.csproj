@@ -42,6 +42,7 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Domain\AnalysisResult.cs" />
+    <Compile Include="Domain\CriticalRuleSet.cs" />
     <Compile Include="Domain\Finding.cs" />
     <Compile Include="Domain\FindingSeverity.cs" />
     <Compile Include="Domain\LogAnalyzer.cs" />
