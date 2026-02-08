@@ -22,13 +22,13 @@ It is designed to simulate a real-world automotive and cybersecurity diagnostic 
 ## Screenshots
 
 ### Main UI with Loaded Logs
-![Main UI](Screenshots/AutoTriage_1.png)
+![Main UI](AutoTriage.Core/Screenshot/AutoTriage_1.png)
 
 ### Analysis Results with Severity Breakdown
-![Analysis Results](Screenshots/AutoTriage_2.png)
+![Analysis Results](AutoTriage.Core/Screenshot/AutoTriage_2.png)
 
 ### Cleared State / Fresh Session
-![Cleared State](Screenshots/AutoTriage_3.png)
+![Cleared State](AutoTriage.Core/Screenshot/AutoTriage_3.png)
 
 ## Technologies Used
 - C#
