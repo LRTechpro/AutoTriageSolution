@@ -48,5 +48,10 @@
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
   <ItemGroup />
+  <ItemGroup>
+    <Content Include="Screenshot\AutoTriage_1.png" />
+    <Content Include="Screenshot\AutoTriage_2.png" />
+    <Content Include="Screenshot\AutoTriage_3.png" />
+  </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>
