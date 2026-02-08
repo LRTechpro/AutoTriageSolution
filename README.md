@@ -1,13 +1,28 @@
 # AutoTriageSolution
 
-AutoTriageSolution is a Windows-based diagnostic utility built in C# (.NET WinForms) for automated log triage and severity analysis.
+AutoTriageSolution is a Windows-based diagnostic utility built in C# (.NET WinForms) for automated log triage and severity analysis.  
 It reflects professional diagnostic, security, and operational tooling practices by separating analysis logic from presentation, enabling reuse, reliability, and long-term maintainability.
 
 The application processes raw log data, identifies notable events, classifies severity, and presents structured results suitable for technical review and troubleshooting workflows.
 
+## What’s New (TODO: version)
+
+This release adds support for **CRITICAL** findings via the **Auto Triage Helper** in `AutoTriage.Core`.
+
+- Added **CRITICAL** severity classification for stop-the-line conditions.
+- Added a **Critical Findings** ruleset to detect high-risk indicators in automotive diagnostics and cybersecurity contexts.
+- TODO: Add remaining release notes items once the final feature list is confirmed.
+
 ---
 
-## Key Capabilities
+## Key Capabilities (This Release)
+
+- Auto Triage Helper: **Critical Findings** detection
+- **CRITICAL** severity classification and filtering
+
+---
+
+## Core Capabilities
 
 - Load or paste raw log data
 - Automated detection of ERROR, WARN, and SUCCESS events
@@ -60,12 +75,13 @@ The application is distributed as a prebuilt Windows executable and does not req
 
 ### Option 1: Run from GitHub Release (Recommended)
 
-1. Navigate to the Releases section of this repository
-2. Download the latest Windows x64 release ZIP
+1. Navigate to the **Releases** section of this repository
+2. Download the latest Windows x64 release ZIP  
+   - TODO: Confirm exact ZIP name (example: `AutoTriageSolution_win-x64_vX.Y.Z.zip`)
 3. Extract the archive to a local folder
 4. Launch the application by running:
 
-AutoTriage.Gui.exe
+`AutoTriage.Gui.exe` (exact)
 
 The release bundle includes all required runtime dependencies. No additional installation steps are required.
 
@@ -74,8 +90,8 @@ The release bundle includes all required runtime dependencies. No additional ins
 ### Option 2: Run from Source (Development)
 
 1. Clone the repository
-2. Open AutoTriageSolution.sln in Visual Studio
-3. Set AutoTriage.Gui as the startup project
+2. Open `AutoTriageSolution.sln` in Visual Studio
+3. Set `AutoTriage.Gui` as the startup project
 4. Build and run using Release or Debug configuration
 
 ---
@@ -84,13 +100,14 @@ The release bundle includes all required runtime dependencies. No additional ins
 
 - Windows 10 or later
 - x64 architecture
-- .NET runtime included with release package
+- TODO: Confirm .NET Desktop Runtime version (example: .NET 8 Desktop Runtime), if applicable
+- If using the Release ZIP: runtime dependencies are included (framework-dependent packaging)
 
 ---
 
 ## Distribution Notes
 
-The executable is packaged as a framework-dependent Windows application.
+The executable is packaged as a framework-dependent Windows application.  
 This mirrors common internal distribution practices for diagnostic, analysis, and security tooling in professional environments.
 
 ---
@@ -107,5 +124,5 @@ This mirrors common internal distribution practices for diagnostic, analysis, an
 
 ## Project Status
 
-This project is actively maintained as a professional diagnostic tooling example and portfolio artifact.
+This project is actively maintained as a professional diagnostic tooling example and portfolio artifact.  
 The architecture and implementation are intentionally aligned with real-world analysis, diagnostics, and security tool design patterns.
