@@ -1,24 +1,41 @@
 # AutoTriageSolution
 
-Auto Log Triage Helper is a Windows Forms application that demonstrates
-DLL usage in C# by separating log analysis logic from the user interface.
-
-## Projects
-- **AutoTriage.Core** – Class Library (DLL)
-  - Contains log analysis logic and data models
-- **AutoTriage.Gui** – WinForms Application
-  - Provides a user interface for loading, analyzing, and filtering logs
+AutoTriageSolution is a C# WinForms application that performs automated log triage and severity analysis.
+It is designed to simulate a real-world automotive and cybersecurity diagnostic triage tool.
 
 ## Features
 - Paste or load log files
-- Analyze logs for Errors, Warnings, and Success messages
-- Filter results by severity
-- Display summary statistics and a health score
+- Automatic detection of ERROR, WARN, and SUCCESS events
+- Severity filtering via checkboxes
+- Line-numbered results table
+- Summary scoring based on findings
+- Clean, code-first WinForms UI
+- Modular architecture with Core DLL and GUI separation
 
-## Technologies
+## Architecture
+- **AutoTriage.Core**  
+  Contains analysis logic, severity classification, and domain models.
+
+- **AutoTriage.Gui**  
+  WinForms front-end responsible for UI rendering and user interaction.
+
+## Screenshots
+
+### Main UI with Loaded Logs
+![Main UI](Screenshots/AutoTriage_1.png)
+
+### Analysis Results with Severity Breakdown
+![Analysis Results](Screenshots/AutoTriage_2.png)
+
+### Cleared State / Fresh Session
+![Cleared State](Screenshots/AutoTriage_3.png)
+
+## Technologies Used
 - C#
-- .NET
-- Windows Forms
-- Class Libraries (DLLs)
+- .NET (WinForms)
+- DataGridView
+- Modular DLL architecture
+- Git & GitHub
 
-This project was created for **Assignment 4.1 – Creating DLLs with Visual Studio**.
+## Status
+This project is actively developed as part of coursework and portfolio demonstration.
