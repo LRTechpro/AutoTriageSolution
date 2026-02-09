@@ -1,7 +1,10 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
+using System.Linq;
 using System.Windows.Forms;
+using AutoTriage.Core; // Access LogAnalyzer, Finding, FindingSeverity, AnalysisResult
 
 namespace AutoTriage.Gui
 {
@@ -11,7 +14,7 @@ namespace AutoTriage.Gui
     /// Design intent:
     /// - This project (AutoTriage.Gui) is responsible ONLY for the user experience:
     ///   input, buttons, filtering, and presenting results.
-    /// - The analysis logic should ultimately live in the DLL project (AutoTriage.Core)
+    /// - The analysis logic lives in the DLL project (AutoTriage.Core)
     ///   so it can be reused and tested independently of the UI.
     /// </summary>
     public class Form1 : Form
@@ -22,18 +25,22 @@ namespace AutoTriage.Gui
         // These fields represent the "surface area" of the UI.
         // Declaring them as readonly ensures the control references
         // cannot be re-assigned after initialization (safer state management).
-        private readonly TextBox txtLogInput = new TextBox();
-        private readonly Button btnAnalyze = new Button();
-        private readonly Button btnLoadFile = new Button();
-        private readonly Button btnClear = new Button();
+        private readonly TextBox txtLogInput = new();
+        private readonly Button btnAnalyze = new();
+        private readonly Button btnLoadFile = new();
+        private readonly Button btnClear = new();
 
-        private readonly CheckBox chkShowErrors = new CheckBox();
-        private readonly CheckBox chkShowWarnings = new CheckBox();
-        private readonly CheckBox chkShowSuccess = new CheckBox();
+        private readonly CheckBox chkShowCritical = new();  // NEW: Critical filter
+        private readonly CheckBox chkShowErrors = new();
+        private readonly CheckBox chkShowWarnings = new();
+        private readonly CheckBox chkShowSuccess = new();
 
-        private readonly DataGridView dgvResults = new DataGridView();
-        private readonly Label lblTitle = new Label();
-        private readonly Label lblSummary = new Label();
+        private readonly DataGridView dgvResults = new();
+        private readonly Label lblTitle = new();
+        private readonly Label lblSummary = new();
+
+        // Place this at the class level (as a private static readonly field)
+        private static readonly string[] LineSeparators = new[] { "\r\n", "\n" };
 
         // =======================================================
         // FORM INITIALIZATION (ENTRY POINT INTO THE UI)
@@ -67,20 +74,20 @@ namespace AutoTriage.Gui
             // Buttons
             btnClear.Click += (_, __) => ClearAll();
             btnLoadFile.Click += (_, __) => LoadFromFile();
-
-            // NOTE: Currently calling AnalyzeWithDll().
-            // For the final "DLL assignment" architecture, this should call the DLL analyzer:
-            // e.g., new LogAnalyzer().Analyze(txtLogInput.Text)
             btnAnalyze.Click += (_, __) => AnalyzeWithDll();
 
             // Checkboxes (filters)
             // When the filter toggles change, we reapply filtering to what is displayed.
+            // IMPORTANT: chkShowCritical is NEW and must be wired to FilterChanged()
+            // so that toggling Critical on/off immediately updates the DataGridView.
+            chkShowCritical.CheckedChanged += (_, __) => FilterChanged();
             chkShowErrors.CheckedChanged += (_, __) => FilterChanged();
             chkShowWarnings.CheckedChanged += (_, __) => FilterChanged();
             chkShowSuccess.CheckedChanged += (_, __) => FilterChanged();
 
             // Initialize the summary line so the UI starts in a clean, known state.
-            UpdateSummary(totalLines: 0, errors: 0, warnings: 0, success: 0, score: 0);
+            // UPDATED: Now includes criticals=0 parameter.
+            UpdateSummary(totalLines: 0, criticals: 0, errors: 0, warnings: 0, success: 0, score: 0);
         }
 
         // =======================================================
@@ -145,7 +152,7 @@ namespace AutoTriage.Gui
             // -----------------------
             // Two-column TableLayoutPanel:
             // - Left: buttons (Analyze/Load/Clear)
-            // - Right: filter toggles (Errors/Warn/Success)
+            // - Right: filter toggles (Critical/Errors/Warn/Success)
             var controlsRow = new TableLayoutPanel
             {
                 Dock = DockStyle.Top,
@@ -197,7 +204,20 @@ namespace AutoTriage.Gui
             };
             controlsRow.Controls.Add(filtersPanel, 1, 0);
 
-            // Default filters to checked so users see results immediately.
+            // DEFAULT FILTER CONFIGURATION:
+            // All severity levels are checked by default so users see complete results immediately.
+            // This is especially important for Critical findings which represent stop-the-line issues
+            // (security breaches, ECU crashes, flash failures) that should never be hidden by default.
+            
+            // NEW: Show Critical checkbox
+            // WHY THIS MUST BE FIRST:
+            // Visual hierarchy: Critical > Error > Warning > Success
+            // Placing it first in the UI reinforces that Critical findings are highest priority.
+            chkShowCritical.Text = "Show Critical";
+            chkShowCritical.Checked = true;  // MUST default to checked for safety/security
+            chkShowCritical.AutoSize = true;
+            chkShowCritical.ForeColor = Color.DarkRed;  // Visual emphasis for stop-the-line issues
+
             chkShowErrors.Text = "Show Errors";
             chkShowErrors.Checked = true;
             chkShowErrors.AutoSize = true;
@@ -210,6 +230,8 @@ namespace AutoTriage.Gui
             chkShowSuccess.Checked = true;
             chkShowSuccess.AutoSize = true;
 
+            // Add to panel in priority order: Critical first, Success last
+            filtersPanel.Controls.Add(chkShowCritical);  // NEW
             filtersPanel.Controls.Add(chkShowErrors);
             filtersPanel.Controls.Add(chkShowWarnings);
             filtersPanel.Controls.Add(chkShowSuccess);
@@ -274,7 +296,8 @@ namespace AutoTriage.Gui
                 FillWeight = 12
             };
 
-            // Column: Severity classification (error/warn/success).
+            // Column: Severity classification (CRITICAL/ERROR/WARN/SUCCESS).
+            // UPDATED: Now handles all four severity levels including Critical.
             var colSeverity = new DataGridViewTextBoxColumn
             {
                 Name = "colSeverity",
@@ -317,7 +340,8 @@ namespace AutoTriage.Gui
         {
             txtLogInput.Clear();
             dgvResults.Rows.Clear();
-            UpdateSummary(0, 0, 0, 0, 0);
+            // UPDATED: Now includes criticals parameter
+            UpdateSummary(0, 0, 0, 0, 0, 0);
         }
 
         /// <summary>
@@ -355,17 +379,17 @@ namespace AutoTriage.Gui
         // =======================================================
         // ANALYSIS (DLL INTEGRATION)
         // =======================================================
-        // IMPORTANT ARCHITECTURE NOTE:
-        // For this assignment, analysis logic is intentionally separated into
-        // the AutoTriage.Core DLL. This GUI method is responsible only for:
-        // 1) Passing raw log input to the DLL
-        // 2) Displaying the returned analysis results in the UI
-        //
-        // This design mirrors real-world applications where business logic
-        // is decoupled from presentation logic.
+        // CRITICAL ARCHITECTURE CHANGE:
+        // This method now calls AutoTriage.Core.LogAnalyzer instead of doing inline analysis.
+        // This separation is essential because:
+        // 1) The Core DLL contains validated, rule-based detection logic (CriticalRuleSet)
+        // 2) The Core DLL can be reused in other tools (CLI, web service, unit tests)
+        // 3) The GUI is responsible ONLY for presentation, not business logic
         /// <summary>
         /// Calls the AutoTriage.Core DLL to analyze the log input
         /// and displays the results in the results grid.
+        /// 
+        /// UPDATED: Now properly integrates with Core DLL and handles Critical severity.
         /// </summary>
         private void AnalyzeWithDll()
         {
@@ -385,62 +409,74 @@ namespace AutoTriage.Gui
 
             // Split into lines (array of strings) for line-by-line processing.
             // This demonstrates working with array types and string processing.
-            var lines = text.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None);
+            var lines = text.Split(LineSeparators, StringSplitOptions.None);
 
-            // Counters used for summary statistics and scoring.
-            int errors = 0, warnings = 0, success = 0;
+            // ========================================================================
+            // CORE DLL INTEGRATION: Call LogAnalyzer.Analyze()
+            // ========================================================================
+            // WHY THIS IS CRITICAL:
+            // - The Core DLL contains the validated rule-based detection logic (CriticalRuleSet)
+            // - It handles LOW_VOLTAGE, LOW_SOC, UDS failures, security breaches, etc.
+            // - It properly assigns FindingSeverity.Critical for stop-the-line issues
+            // - The GUI should NEVER re-implement analysis logic (violates separation of concerns)
+            var analyzer = new LogAnalyzer(); // <-- LogAnalyzer must be defined in AutoTriage.Core
+            var analysisResult = analyzer.Analyze(lines);
 
-            // Iterate through each line and apply simple classification rules.
-            for (int i = 0; i < lines.Length; i++)
+            // ========================================================================
+            // COUNT FINDINGS BY SEVERITY
+            // ========================================================================
+            // WHY WE COUNT HERE INSTEAD OF USING AnalysisResult COUNTS:
+            // The AnalysisResult may not have pre-computed counts for Critical
+            // (if it was added after AnalysisResult was created).
+            // Counting from Findings ensures we never miss Critical findings.
+            int criticals = analysisResult.Findings.Count(f => f.Severity == FindingSeverity.Critical);
+            int errors = analysisResult.Findings.Count(f => f.Severity == FindingSeverity.Error);
+            int warnings = analysisResult.Findings.Count(f => f.Severity == FindingSeverity.Warning);
+            int success = analysisResult.Findings.Count(f => f.Severity == FindingSeverity.Success);
+
+            // ========================================================================
+            // POPULATE DATAGRIDVIEW WITH FILTERED FINDINGS
+            // ========================================================================
+            // WHY FILTERING HAPPENS HERE:
+            // - User may toggle checkboxes to hide/show different severities
+            // - The DataGridView should only display findings that pass the filter
+            // - Core DLL returns ALL findings; GUI decides what to display
+            foreach (var finding in analysisResult.Findings)
             {
-                string line = lines[i];
-                string upper = line.ToUpperInvariant();
-
-                string severity;
-                string code;
-
-                // Classification rules:
-                // - ERROR / FAIL => Error
-                // - WARN         => Warning
-                // - SUCCESS/COMPLETE => Success
-                if (upper.Contains("ERROR") || upper.Contains("FAIL"))
-                {
-                    severity = "ERROR";
-                    code = "E-LOG";
-                    errors++;
-                }
-                else if (upper.Contains("WARN"))
-                {
-                    severity = "WARN";
-                    code = "W-LOG";
-                    warnings++;
-                }
-                else if (upper.Contains("SUCCESS") || upper.Contains("COMPLETE"))
-                {
-                    severity = "SUCCESS";
-                    code = "S-LOG";
-                    success++;
-                }
-                else
-                {
-                    // If it is not relevant to triage, we skip it.
-                    continue;
-                }
-
                 // Apply user-selected filter toggles before displaying in the grid.
-                if (ShouldDisplaySeverity(severity))
+                // CRITICAL: Must include Critical in the filter check or Critical findings won't appear!
+                if (ShouldDisplayFinding(finding))
                 {
+                    // Map FindingSeverity enum to display string for the DataGridView
+                    string severityText = GetSeverityText(finding.Severity);
+
                     // Add a row to the results grid.
                     // Columns: LineNumber, Severity, Code, Message
-                    dgvResults.Rows.Add(i + 1, severity, code, line);
+                    // UPDATED: Now uses finding.Code and finding.Title (or Message if Title is empty)
+                    string displayMessage = !string.IsNullOrWhiteSpace(finding.Title)
+                        ? finding.Title
+                        : finding.LineText ?? "(no message)";
+
+                    dgvResults.Rows.Add(
+                        finding.LineNumber,
+                        severityText,
+                        finding.Code ?? "UNKNOWN",
+                        displayMessage
+                    );
                 }
             }
 
+            // ========================================================================
+            // COMPUTE SCORE AND UPDATE SUMMARY
+            // ========================================================================
             // Compute score based on weighted issues.
+            // TODO: Current score does not include Critical (needs product owner input on weighting).
+            // For now, score computation remains unchanged to avoid breaking existing expectations.
             int score = ComputeScore(errors, warnings);
 
             // Update summary line at bottom of UI.
-            UpdateSummary(lines.Length, errors, warnings, success, score);
+            // UPDATED: Now includes criticals count.
+            UpdateSummary(lines.Length, criticals, errors, warnings, success, score);
         }
 
         // =======================================================
@@ -449,18 +485,53 @@ namespace AutoTriage.Gui
 
         /// <summary>
         /// Determines whether a finding should be displayed based on the filter checkboxes.
+        /// 
+        /// UPDATED: Now handles FindingSeverity.Critical.
+        /// 
+        /// WHY THIS IS CRITICAL:
+        /// - If we don't check chkShowCritical, Critical findings will NEVER appear in the grid
+        /// - Critical findings represent stop-the-line issues (ECU crashes, security breaches, etc.)
+        /// - They must be visible by default and filterable by the user
         /// </summary>
-        /// <param name="severity">Severity string derived from analysis logic.</param>
-        /// <returns>True if the severity is enabled in the UI filters; otherwise false.</returns>
-        private bool ShouldDisplaySeverity(string severity)
+        /// <param name="finding">Finding object from Core DLL analysis.</param>
+        /// <returns>True if the finding should be displayed; otherwise false.</returns>
+        private bool ShouldDisplayFinding(Finding finding)
         {
-            // Switch expression maps severity category to a checkbox toggle.
+            // Switch expression maps FindingSeverity enum to the corresponding checkbox state.
+            // CRITICAL: Must include FindingSeverity.Critical case or those findings are hidden!
+            return finding.Severity switch
+            {
+                FindingSeverity.Critical => chkShowCritical.Checked,  // NEW: Critical filter
+                FindingSeverity.Error => chkShowErrors.Checked,
+                FindingSeverity.Warning => chkShowWarnings.Checked,
+                FindingSeverity.Success => chkShowSuccess.Checked,
+                _ => true  // Unknown severity: display by default (defensive programming)
+            };
+        }
+
+        /// <summary>
+        /// Maps FindingSeverity enum values to human-readable display strings.
+        /// 
+        /// UPDATED: Now includes Critical mapping.
+        /// 
+        /// WHY THIS IS NECESSARY:
+        /// - The DataGridView expects string values for display
+        /// - The Core DLL uses FindingSeverity enum for type safety
+        /// - This method bridges the gap between Core (enum) and GUI (string)
+        /// </summary>
+        /// <param name="severity">FindingSeverity enum value from Core DLL.</param>
+        /// <returns>Display string for the Severity column.</returns>
+        private string GetSeverityText(FindingSeverity severity)
+        {
+            // Switch expression for clean, readable mapping.
+            // CRITICAL: Must include Critical case or it will display as "UNKNOWN"!
             return severity switch
             {
-                "ERROR" => chkShowErrors.Checked,
-                "WARN" => chkShowWarnings.Checked,
-                "SUCCESS" => chkShowSuccess.Checked,
-                _ => true
+                FindingSeverity.Critical => "CRITICAL",  // NEW: Critical text
+                FindingSeverity.Error => "ERROR",
+                FindingSeverity.Warning => "WARN",
+                FindingSeverity.Success => "SUCCESS",
+                _ => "UNKNOWN"  // Defensive fallback
             };
         }
 
@@ -470,8 +541,16 @@ namespace AutoTriage.Gui
         /// - Subtract 15 points per error
         /// - Subtract 5 points per warning
         /// - Clamp final value between 0 and 100
+        /// 
+        /// TODO: Incorporate Critical findings into score calculation.
+        /// Current implementation does not deduct points for Critical because:
+        /// 1) Product owner has not defined Critical weighting yet
+        /// 2) Critical may be so severe it should immediately set score to 0
+        /// 3) Or Critical may require a separate "severity score" vs "health score"
+        /// 
+        /// For now, this method remains unchanged to avoid breaking existing score expectations.
         /// </summary>
-        private int ComputeScore(int errors, int warnings)
+        private static int ComputeScore(int errors, int warnings)
         {
             int score = 100 - (errors * 15) - (warnings * 5);
 
@@ -485,6 +564,8 @@ namespace AutoTriage.Gui
         /// <summary>
         /// Called when filter checkboxes change.
         /// Re-runs analysis so the results grid reflects the current filter choices.
+        /// 
+        /// UPDATED: Now triggers when chkShowCritical changes (wired in constructor).
         /// </summary>
         private void FilterChanged()
         {
@@ -496,11 +577,26 @@ namespace AutoTriage.Gui
 
         /// <summary>
         /// Updates the bottom summary label with analysis counts and computed score.
+        /// 
+        /// UPDATED: Now includes criticals count.
+        /// 
+        /// WHY THIS IS CRITICAL:
+        /// - Triage engineers need to see Critical finding counts immediately
+        /// - Critical findings represent stop-the-line issues (security, crashes, flash failures)
+        /// - Omitting Critical count from summary would hide essential information
         /// </summary>
-        private void UpdateSummary(int totalLines, int errors, int warnings, int success, int score)
+        /// <param name="totalLines">Total lines processed.</param>
+        /// <param name="criticals">Number of Critical-severity findings.</param>
+        /// <param name="errors">Number of Error-severity findings.</param>
+        /// <param name="warnings">Number of Warning-severity findings.</param>
+        /// <param name="success">Number of Success-severity findings.</param>
+        /// <param name="score">Computed health score (0-100).</param>
+        private void UpdateSummary(int totalLines, int criticals, int errors, int warnings, int success, int score)
         {
+            // Format string now includes Criticals before Errors (priority order).
+            // NOTE: Score currently does not include Critical weighting (see TODO in ComputeScore).
             lblSummary.Text =
-                $"Summary: Lines={totalLines} | Errors={errors} | Warnings={warnings} | Success={success} | Score={score}";
+                $"Summary: Lines={totalLines} | Criticals={criticals} | Errors={errors} | Warnings={warnings} | Success={success} | Score={score} | TODO: include Critical in score";
         }
     }
 }
