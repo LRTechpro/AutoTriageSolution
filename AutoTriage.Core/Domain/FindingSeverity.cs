@@ -35,6 +35,8 @@
         /// - Temporary timeout
         /// - Retry condition
         /// - Unsupported request that does not block progress
+        /// - Battery voltage below optimal threshold but still functional
+        /// - State of charge below recommended levels
         /// 
         /// Warnings should be reviewed but do not usually stop work.
         /// </summary>
@@ -48,26 +50,29 @@
         /// - Programming step failure
         /// - Invalid response from ECU
         /// 
-        /// Errors are actionable but may still be recoverable.
+        /// Errors represent actionable failures that need investigation.
         /// </summary>
         Error = 2,
 
         /// <summary>
-        /// Represents a critical "stop-the-line" condition.
+        /// Represents a stop-the-line condition requiring immediate action.
         /// 
         /// Examples:
-        /// - Watchdog resets or repeated ECU crashes
-        /// - Secure boot or signature verification failures
-        /// - SecurityAccess lockouts or brute-force patterns
-        /// - Bus-off or gateway communication loss
-        /// - Flash programming or OTA integrity failures
+        /// - ECU watchdog reset / crash
+        /// - Memory corruption detected
+        /// - Secure boot failure
+        /// - Critical voltage drop that may cause ECU brownout
+        /// - State of charge critically low (system may shut down)
+        /// - Security breach indicators
+        /// - Flash programming pipeline failure
         /// 
-        /// Critical findings indicate high risk to:
-        /// - Vehicle safety
-        /// - System security
-        /// - ECU stability
+        /// Critical findings indicate systemic issues that:
+        /// - Threaten vehicle safety or reliability
+        /// - May result in ECU instability or data loss
+        /// - Indicate security compromise or tampering
+        /// - Require immediate triage and escalation
         /// 
-        /// These findings should be escalated immediately.
+        /// These findings should block further operations until resolved.
         /// </summary>
         Critical = 3
     }
