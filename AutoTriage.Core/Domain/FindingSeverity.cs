@@ -74,6 +74,17 @@
         /// 
         /// These findings should block further operations until resolved.
         /// </summary>
-        Critical = 3
+        Critical = 3,
+
+        /// <summary>
+        /// Represents informational messages, such as keyword matches in logs.
+        /// 
+        /// Info severity is typically used for:
+        /// - Keyword matches that do not indicate a failure or risk
+        /// - Informational lines that provide context but require no action
+        /// 
+        /// These findings are useful for analysis but do not impact system state.
+        /// </summary>
+        Info = 4
     }
 }

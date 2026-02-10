@@ -15,6 +15,11 @@ namespace AutoTriage.Core
         public int TotalLines { get; set; }
 
         /// <summary>
+        /// Number of critical-level findings detected.
+        /// </summary>
+        public int CriticalCount { get; set; }
+
+        /// <summary>
         /// Number of error-level findings detected.
         /// </summary>
         public int ErrorCount { get; set; }
@@ -37,7 +42,7 @@ namespace AutoTriage.Core
         /// <summary>
         /// Collection of detailed findings discovered during analysis.
         /// </summary>
-        public List<Finding> Findings { get; } = new List<Finding>();
+        public List<Finding> Findings { get; set; } = new List<Finding>();
     }
 }
 
