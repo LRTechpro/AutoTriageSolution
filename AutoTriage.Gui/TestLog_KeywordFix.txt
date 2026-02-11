@@ -1,0 +1,15 @@
+[0001] System boot starting...
+[0002] Initializing watchdog timer
+[0003] WDT timeout set to 30 seconds
+[0004] ERROR WDT RESET occurred
+[0005] RESET REASON: WATCHDOG
+[0006] Battery monitoring enabled
+[0007] SOC: 69%
+[0008] Battery State of Charge (SOC) nominal
+[0009] Low battery condition: SOC below threshold
+[0010] Long hex run: 0xDEADBEEF0123456789ABCDEF
+[0011] Configuration loaded successfully
+[0012] Network interface ready
+[0013] SUCCESS System initialization complete
+[0014] Watchdog monitor active
+[0015] Ready for operation

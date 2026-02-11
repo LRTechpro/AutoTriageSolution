@@ -43,6 +43,35 @@ namespace AutoTriage.Core
         /// Collection of detailed findings discovered during analysis.
         /// </summary>
         public List<Finding> Findings { get; set; } = new List<Finding>();
+        
+        // NEW: Track ALL lines for keyword searching
+        public List<LogLine> AllLines { get; set; } = new List<LogLine>();
+    }
+
+    /// <summary>
+    /// Represents a single line from the log, regardless of whether it became a finding.
+    /// </summary>
+    public class LogLine
+    {
+        /// <summary>
+        /// The line number in the original log file.
+        /// </summary>
+        public int LineNumber { get; set; }
+
+        /// <summary>
+        /// The raw text content of the log line.
+        /// </summary>
+        public string RawText { get; set; }
+
+        /// <summary>
+        /// The severity level detected for this log line, if any.
+        /// </summary>
+        public FindingSeverity DetectedSeverity { get; set; }
+
+        /// <summary>
+        /// Indicates if this log line is associated with a finding.
+        /// </summary>
+        public bool IsFinding { get; set; }
     }
 }
 

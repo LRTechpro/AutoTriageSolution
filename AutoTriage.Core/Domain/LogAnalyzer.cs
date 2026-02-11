@@ -7,7 +7,6 @@ namespace AutoTriage.Core
 {
     public class LogAnalyzer
     {
-        // ExplicitTagRegex is now initialized in the static constructor
         private readonly Regex ExplicitTagRegex;
 
         public LogAnalyzer()
@@ -18,9 +17,6 @@ namespace AutoTriage.Core
             );
         }
 
-        // Tag-first severity detection (authoritative) - Updated to handle [timestamp] prefixes
-
-        // Keyword heuristics (only used if no explicit tag)
         private static readonly string[] CriticalKeywords = 
         {
             "critical", "fatal", "panic", "catastrophic", "system failure", "unrecoverable"
@@ -56,11 +52,13 @@ namespace AutoTriage.Core
                     WarningCount = 0,
                     SuccessCount = 0,
                     Score = 0,
-                    Findings = new List<Finding>()
+                    Findings = new List<Finding>(),
+                    AllLines = new List<LogLine>()
                 };
             }
 
             var findings = new List<Finding>();
+            var allLines = new List<LogLine>();
 
             for (int i = 0; i < lines.Length; i++)
             {
@@ -73,9 +71,12 @@ namespace AutoTriage.Core
                 bool hasExplicitTag;
                 DetermineSeverity(line, out severity, out hasExplicitTag);
 
+                bool isFinding = false;
+
                 // Only create findings for non-info severities or important info
                 if (severity != FindingSeverity.Info || ShouldIncludeInfoLine(line))
                 {
+                    isFinding = true;
                     findings.Add(new Finding
                     {
                         LineNumber = i + 1,
@@ -88,6 +89,15 @@ namespace AutoTriage.Core
                         WhyItMatters = GetWhyItMatters(severity)
                     });
                 }
+
+                // NEW: Track ALL lines for keyword searching
+                allLines.Add(new LogLine
+                {
+                    LineNumber = i + 1,
+                    RawText = line,
+                    DetectedSeverity = severity,
+                    IsFinding = isFinding
+                });
             }
 
             return new AnalysisResult
@@ -98,16 +108,119 @@ namespace AutoTriage.Core
                 WarningCount = findings.Count(f => f.Severity == FindingSeverity.Warning),
                 SuccessCount = findings.Count(f => f.Severity == FindingSeverity.Success),
                 Score = CalculateScore(findings),
-                Findings = findings
+                Findings = findings,
+                AllLines = allLines
             };
         }
 
         /// <summary>
-        /// Tag-first severity determination with strict precedence.
-        /// 1. Check for explicit tags (AUTHORITATIVE - cannot be overridden)
-        /// 2. If no tag, use keyword heuristics
-        /// 3. Default to Info
+        /// Searches for keyword matches across ALL lines (not just findings).
+        /// Returns findings created from matching lines.
         /// </summary>
+        public List<Finding> SearchKeywordsInAllLines(List<LogLine> allLines, string[] keywords, bool includeNonFindings)
+        {
+            if (allLines == null || allLines.Count == 0 || keywords == null || keywords.Length == 0)
+            {
+                return new List<Finding>();
+            }
+
+            var results = new List<Finding>();
+
+            foreach (var logLine in allLines)
+            {
+                // Skip non-findings if the toggle is OFF
+                if (!includeNonFindings && !logLine.IsFinding)
+                    continue;
+
+                // Case-insensitive substring matching
+                string lineLower = logLine.RawText.ToLowerInvariant();
+                bool matchesAnyKeyword = keywords.Any(kw => lineLower.Contains(kw.ToLowerInvariant()));
+
+                if (matchesAnyKeyword)
+                {
+                    results.Add(new Finding
+                    {
+                        LineNumber = logLine.LineNumber,
+                        Severity = logLine.DetectedSeverity,
+                        LineText = logLine.RawText.Trim(),
+                        Title = ExtractTitle(logLine.RawText, logLine.DetectedSeverity),
+                        Code = logLine.IsFinding ? ExtractCode(logLine.DetectedSeverity, true) : "KEYWORD",
+                        RuleId = string.Format("KEYWORD_{0}", logLine.LineNumber),
+                        Evidence = logLine.RawText.Trim(),
+                        WhyItMatters = logLine.IsFinding ? GetWhyItMatters(logLine.DetectedSeverity) : "Matched keyword filter"
+                    });
+                }
+            }
+
+            return results;
+        }
+
+        /// <summary>
+        /// Parses keyword input with multiple separators and quoted phrases.
+        /// </summary>
+        public static string[] ParseKeywords(string keywordText)
+        {
+            if (string.IsNullOrWhiteSpace(keywordText))
+                return new string[0];
+
+            var keywords = new List<string>();
+            
+            // Handle quoted phrases first
+            var quotedRegex = new Regex(@"""([^""]+)""", RegexOptions.Compiled);
+            var quotedMatches = quotedRegex.Matches(keywordText);
+            
+            foreach (Match match in quotedMatches)
+            {
+                keywords.Add(match.Groups[1].Value.Trim());
+            }
+
+            // Remove quoted phrases from the text
+            string remaining = quotedRegex.Replace(keywordText, " ");
+
+            // Split by multiple separators: newline, comma, semicolon, space
+            string[] separators = new string[] { "\r\n", "\n", ",", ";", " ", "\t" };
+            var tokens = remaining.Split(separators, StringSplitOptions.RemoveEmptyEntries);
+
+            foreach (var token in tokens)
+            {
+                string trimmed = token.Trim();
+                if (!string.IsNullOrWhiteSpace(trimmed) && !keywords.Contains(trimmed))
+                {
+                    keywords.Add(trimmed);
+                }
+            }
+
+            return keywords.ToArray();
+        }
+
+        /// <summary>
+        /// Validation method to verify keyword matching works correctly.
+        /// </summary>
+        public void ValidateKeywordMatching()
+        {
+            string[] testLines = new string[]
+            {
+                "soc: 75%",
+                "SOC: 69%",
+                "Battery State of Charge (SOC)",
+                "[INFO] Starting system",
+                "ERROR: Connection failed"
+            };
+
+            var result = Analyze(testLines, null);
+            var keywords = ParseKeywords("soc");
+            var matches = SearchKeywordsInAllLines(result.AllLines, keywords, true);
+
+            if (matches.Count != 3)
+            {
+                throw new Exception(string.Format(
+                    "Keyword validation FAILED! Expected 3 matches for 'soc', got {0}",
+                    matches.Count));
+            }
+
+            System.Diagnostics.Debug.WriteLine("✓ Keyword matching validation PASSED - 'soc' matched correctly");
+        }
+
         private void DetermineSeverity(string line, out FindingSeverity severity, out bool hasExplicitTag)
         {
             hasExplicitTag = false;
@@ -118,15 +231,12 @@ namespace AutoTriage.Core
                 return;
             }
 
-            // PHASE 1: Check for explicit tags (AUTHORITATIVE - highest priority)
-            // This regex now uses \b word boundaries to find tags anywhere in the line
             var tagMatch = ExplicitTagRegex.Match(line);
             if (tagMatch.Success)
             {
                 hasExplicitTag = true;
                 string tag = tagMatch.Groups[1].Value.ToUpperInvariant();
                 
-                // Explicit tag is AUTHORITATIVE - return immediately without keyword checks
                 switch (tag)
                 {
                     case "CRITICAL":
@@ -151,66 +261,53 @@ namespace AutoTriage.Core
                 }
             }
 
-            // PHASE 2: No explicit tag found - use keyword heuristics ONLY
             string lineLower = line.ToLowerInvariant();
             
-            // Check in order of severity (highest to lowest)
-            
-            // Critical keywords
             if (CriticalKeywords.Any(kw => lineLower.Contains(kw)))
             {
                 severity = FindingSeverity.Critical;
                 return;
             }
 
-            // Error keywords
             if (ErrorKeywords.Any(kw => lineLower.Contains(kw)))
             {
                 severity = FindingSeverity.Error;
                 return;
             }
 
-            // Warning keywords
             if (WarningKeywords.Any(kw => lineLower.Contains(kw)))
             {
                 severity = FindingSeverity.Warning;
                 return;
             }
 
-            // Success keywords
             if (SuccessKeywords.Any(kw => lineLower.Contains(kw)))
             {
                 severity = FindingSeverity.Success;
                 return;
             }
 
-            // Default to Info
             severity = FindingSeverity.Info;
         }
 
         private bool ShouldIncludeInfoLine(string line)
         {
-            // Include info lines that have meaningful content
             string lineLower = line.ToLowerInvariant();
             
-            // Include if it has explicit INFO tag
             if (lineLower.Contains("[info]") || lineLower.Contains("info:") || Regex.IsMatch(line, @"\bINFO\b", RegexOptions.IgnoreCase))
                 return true;
 
-            // Include if it has interesting keywords
             string[] interestingKeywords = { "starting", "loading", "initializing", "config", "version" };
             return interestingKeywords.Any(kw => lineLower.Contains(kw));
         }
 
         private string ExtractTitle(string line, FindingSeverity severity)
         {
-            // Remove timestamp and extract meaningful title
             string cleaned = Regex.Replace(line, @"^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}", "").Trim();
-            cleaned = Regex.Replace(cleaned, @"^\[\d+\]\s*", "").Trim(); // Remove [0008] style prefixes
+            cleaned = Regex.Replace(cleaned, @"^\[\d+\]\s*", "").Trim();
             cleaned = Regex.Replace(cleaned, @"^\[\w+\]\s*", "").Trim();
-            cleaned = Regex.Replace(cleaned, @"^\w+[\s:\-]", "", RegexOptions.IgnoreCase); // Remove severity tag
+            cleaned = Regex.Replace(cleaned, @"^\w+[\s:\-]", "", RegexOptions.IgnoreCase);
             
-            // Truncate if too long
             if (cleaned.Length > 80)
                 cleaned = cleaned.Substring(0, 77) + "...";
             
@@ -219,7 +316,6 @@ namespace AutoTriage.Core
 
         private string ExtractCode(FindingSeverity severity, bool hasExplicitTag)
         {
-            // Code reflects the severity source
             switch (severity)
             {
                 case FindingSeverity.Critical:

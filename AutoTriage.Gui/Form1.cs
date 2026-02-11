@@ -1,822 +1,788 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Drawing;
-using System.IO;
 using System.Linq;
-using System.Text.Json;
-using System.Text.RegularExpressions;
 using System.Windows.Forms;
 using AutoTriage.Core;
-using Timer = System.Windows.Forms.Timer;
-using System.Globalization;
 
 namespace AutoTriage.Gui
 {
-    public class Form1 : Form
+    // ResultRow class for DataGridView binding
+    public class ResultRow
     {
-        private static readonly string AppDataFolder = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            "AutoTriage"
-        );
-        private static readonly string KeywordsFilePath = Path.Combine(AppDataFolder, "keywords.json");
+        public int LineNumber { get; set; }
+        public string Code { get; set; } = "";
+        public string Severity { get; set; } = "";
+        public string Title { get; set; } = "";
+        public string LineText { get; set; } = "";
+        public Color RowColor { get; set; } = Color.White;
+    }
 
-        private readonly TextBox txtLogInput = new();
-        private readonly Button btnAnalyze = new();
-        private readonly Button btnLoadFile = new();
-        private readonly Button btnClear = new();
+    public partial class Form1 : Form
+    {
+        private LogAnalyzer analyzer;
+        private AnalysisResult? currentResult;
+        private BindingList<ResultRow> displayedRows;
+        private BindingSource resultsBindingSource = new BindingSource();
 
-        private readonly CheckBox chkShowCritical = new();
-        private readonly CheckBox chkShowErrors = new();
-        private readonly CheckBox chkShowWarnings = new();
-        private readonly CheckBox chkShowSuccess = new();
-        private readonly CheckBox chkShowInfo = new();
-
-        private readonly Label lblCustomKeywords = new();
-        private readonly TextBox txtCustomKeywords = new();
-        private readonly Button btnClearKeywords = new();
-        private readonly CheckBox chkKeywordOverride = new();
-        private readonly Label lblCustomKeywordsHelp = new();
-        private readonly Label lblKeywordFilterStatus = new();
-        private readonly Label lblActiveFilters = new();
-        private readonly Label lblFilterWarning = new();
-
-        private readonly DataGridView dgvResults = new();
-        private readonly Label lblTitle = new();
-        private readonly Label lblSummary = new();
-
-        // Master findings list (single source of truth) - DO NOT re-analyze, only filter
-        private List<Finding> _allFindings = new List<Finding>();
-        private AnalysisResult? _lastResult;
-        private string[]? _lastLines;
-
-        private static readonly string[] LineSeparators = new[] { "\r\n", "\n" };
-
-        // Keyword debouncing - prevents filtering on every keystroke
-        private readonly Timer _keywordDebounce = new Timer { Interval = 500 };
-        private List<string> _customKeywords = new List<string>();
+        // UI Controls
+        private SplitContainer mainSplitContainer = null!;
+        private TextBox txtLogInput = null!;
+        private TextBox txtKeywordFilter = null!;
+        private CheckBox chkIncludeNonFindings = null!;
+        private CheckBox chkCritical = null!;
+        private CheckBox chkError = null!;
+        private CheckBox chkWarning = null!;
+        private CheckBox chkSuccess = null!;
+        private Button btnLoadFile = null!;
+        private Button btnAnalyze = null!;
+        private Button btnClearAll = null!;
+        private DataGridView dgvResults = null!;
+        private Label lblStatus = null!;
+        private Label lblLoadedFile = null!;
 
         public Form1()
         {
-            Text = "Auto Log Triage Helper";
-            StartPosition = FormStartPosition.CenterScreen;
-            MinimumSize = new Size(1300, 800);
-
-            BuildLayout();
-
-            btnClear.Click += (_, __) => ClearAll();
-            btnLoadFile.Click += (_, __) => LoadFromFile();
-            btnAnalyze.Click += (_, __) => AnalyzeWithDll();
-            btnClearKeywords.Click += (_, __) => ClearKeywords();
-
-            // All severity checkboxes trigger re-filter (not re-analysis)
-            chkShowCritical.CheckedChanged += (_, __) => ApplyFiltersAndBind();
-            chkShowErrors.CheckedChanged += (_, __) => ApplyFiltersAndBind();
-            chkShowWarnings.CheckedChanged += (_, __) => ApplyFiltersAndBind();
-            chkShowSuccess.CheckedChanged += (_, __) => ApplyFiltersAndBind();
-            chkShowInfo.CheckedChanged += (_, __) => ApplyFiltersAndBind();
-            chkKeywordOverride.CheckedChanged += (_, __) => ApplyFiltersAndBind();
-
-            // Keyword debouncing - DO NOT modify textbox text in handler (prevents caret jump)
-            txtCustomKeywords.TextChanged += (_, __) =>
-            {
-                _keywordDebounce.Stop();
-                _keywordDebounce.Start();
-            };
-
-            _keywordDebounce.Tick += (_, __) =>
-            {
-                _keywordDebounce.Stop();
-                OnKeywordsChanged();
-            };
-
-            // Save on focus lost
-            txtCustomKeywords.Leave += (_, __) =>
-            {
-                _keywordDebounce.Stop();
-                OnKeywordsChanged();
-            };
-
-            UpdateSummary(totalLines: 0, criticals: 0, errors: 0, warnings: 0, success: 0, info: 0, score: 0);
-
-            // Load persisted keywords at startup
-            LoadKeywords();
+            analyzer = new LogAnalyzer();
+            displayedRows = new BindingList<ResultRow>();
+            resultsBindingSource.DataSource = displayedRows;
+            InitializeCustomUI();
         }
 
-        private void BuildLayout()
+        private void InitializeCustomUI()
         {
-            var root = new TableLayoutPanel
+            // Set form size and minimum size
+            this.Text = "AutoTriage - Log Analyzer";
+            this.Size = new Size(1300, 900);
+            this.MinimumSize = new Size(1100, 750);
+            this.StartPosition = FormStartPosition.CenterScreen;
+
+            // Main split container (top: log input area, bottom: results area)
+            mainSplitContainer = new SplitContainer
             {
                 Dock = DockStyle.Fill,
-                ColumnCount = 1,
-                RowCount = 5,
-                Padding = new Padding(12),
+                Orientation = Orientation.Horizontal,
+                BorderStyle = BorderStyle.FixedSingle,
+                SplitterWidth = 5
+            };
+            this.Controls.Add(mainSplitContainer);
+
+            // Set 50/50 split on form shown
+            this.Shown += (s, e) => mainSplitContainer.SplitterDistance = (int)(this.ClientSize.Height * 0.5);
+
+            // Maintain 50/50 split on resize
+            this.Resize += (s, e) =>
+            {
+                if (this.WindowState != FormWindowState.Minimized && mainSplitContainer != null)
+                {
+                    mainSplitContainer.SplitterDistance = (int)(this.ClientSize.Height * 0.5);
+                }
             };
 
-            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 200));
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 150));
-            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            // ===== PANEL 1 (TOP): LOG INPUT AREA =====
 
-            Controls.Add(root);
-
-            lblTitle.Text = "Auto Log Triage Helper";
-            lblTitle.AutoSize = true;
-            lblTitle.Font = new Font("Segoe UI", 14, FontStyle.Bold);
-            lblTitle.Margin = new Padding(0, 0, 0, 8);
-            root.Controls.Add(lblTitle, 0, 0);
-
-            txtLogInput.Multiline = true;
-            txtLogInput.ScrollBars = ScrollBars.Both;
-            txtLogInput.WordWrap = false;
-            txtLogInput.Font = new Font("Consolas", 10);
-            txtLogInput.Dock = DockStyle.Fill;
-            txtLogInput.Margin = new Padding(0, 0, 0, 10);
-            root.Controls.Add(txtLogInput, 0, 1);
-
-            // Custom Keywords Container
-            var customKeywordsContainer = new TableLayoutPanel
+            // Label for log input
+            var lblLogInput = new Label
             {
-                Dock = DockStyle.Fill,
-                ColumnCount = 1,
-                RowCount = 5,
-                Margin = new Padding(0, 0, 0, 10),
-                Padding = new Padding(0),
-            };
-            customKeywordsContainer.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            customKeywordsContainer.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            customKeywordsContainer.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            customKeywordsContainer.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            customKeywordsContainer.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            root.Controls.Add(customKeywordsContainer, 0, 2);
-
-            lblCustomKeywords.Text = "Custom Keyword Filter (OR logic - any match included):";
-            lblCustomKeywords.AutoSize = true;
-            lblCustomKeywords.Font = new Font("Segoe UI", 9, FontStyle.Bold);
-            lblCustomKeywords.Margin = new Padding(0, 0, 0, 3);
-            customKeywordsContainer.Controls.Add(lblCustomKeywords, 0, 0);
-
-            txtCustomKeywords.Multiline = true;
-            txtCustomKeywords.ScrollBars = ScrollBars.Vertical;
-            txtCustomKeywords.WordWrap = true;
-            txtCustomKeywords.Font = new Font("Consolas", 9);
-            txtCustomKeywords.Dock = DockStyle.Fill;
-            txtCustomKeywords.Margin = new Padding(0, 0, 0, 5);
-            txtCustomKeywords.PlaceholderText = "Enter keywords (space, comma, newline separated). Example: erase fail soc timeout\nOr use quotes: \"secure boot\" timeout";
-            customKeywordsContainer.Controls.Add(txtCustomKeywords, 0, 1);
-
-            // Keyword controls row (Clear button + Override checkbox)
-            var keywordControlsPanel = new FlowLayoutPanel
-            {
+                Text = "Paste Log Here:",
+                Location = new Point(10, 10),
                 AutoSize = true,
-                FlowDirection = FlowDirection.LeftToRight,
-                WrapContents = false,
-                Margin = new Padding(0, 0, 0, 5),
-                Padding = new Padding(0),
+                Font = new Font("Segoe UI", 10F, FontStyle.Bold)
             };
-            customKeywordsContainer.Controls.Add(keywordControlsPanel, 0, 2);
+            mainSplitContainer.Panel1.Controls.Add(lblLogInput);
 
-            btnClearKeywords.Text = "Clear Keywords";
-            btnClearKeywords.Size = new Size(120, 26);
-            btnClearKeywords.Margin = new Padding(0, 0, 12, 0);
-            keywordControlsPanel.Controls.Add(btnClearKeywords);
+            // Loaded file path label
+            lblLoadedFile = new Label
+            {
+                Text = "",
+                Location = new Point(150, 12),
+                AutoSize = true,
+                Font = new Font("Segoe UI", 8F),
+                ForeColor = Color.DarkBlue
+            };
+            mainSplitContainer.Panel1.Controls.Add(lblLoadedFile);
 
-            chkKeywordOverride.Text = "Custom keywords override severity filters (show matches even if severity unchecked)";
-            chkKeywordOverride.AutoSize = true;
-            chkKeywordOverride.Font = new Font("Segoe UI", 8, FontStyle.Bold);
-            chkKeywordOverride.ForeColor = Color.DarkBlue;
-            chkKeywordOverride.Checked = false;
-            keywordControlsPanel.Controls.Add(chkKeywordOverride);
+            // Action buttons row
+            btnLoadFile = new Button
+            {
+                Text = "Load Log File",
+                Location = new Point(10, 40),
+                Size = new Size(120, 32),
+                Font = new Font("Segoe UI", 9F, FontStyle.Bold)
+            };
+            btnLoadFile.Click += BtnLoadFile_Click;
+            mainSplitContainer.Panel1.Controls.Add(btnLoadFile);
 
-            lblKeywordFilterStatus.Text = "Custom keyword filter: OFF";
-            lblKeywordFilterStatus.AutoSize = true;
-            lblKeywordFilterStatus.Font = new Font("Segoe UI", 8, FontStyle.Bold);
-            lblKeywordFilterStatus.ForeColor = Color.DarkGray;
-            lblKeywordFilterStatus.Margin = new Padding(0, 0, 0, 3);
-            customKeywordsContainer.Controls.Add(lblKeywordFilterStatus, 0, 3);
+            btnAnalyze = new Button
+            {
+                Text = "Analyze Log",
+                Location = new Point(140, 40),
+                Size = new Size(120, 32),
+                Font = new Font("Segoe UI", 9F, FontStyle.Bold)
+            };
+            btnAnalyze.Click += BtnAnalyze_Click;
+            mainSplitContainer.Panel1.Controls.Add(btnAnalyze);
 
-            lblCustomKeywordsHelp.Text = "Supports: space, comma (,), semicolon (;), newline, tab, quotes for phrases. Case-insensitive substring matching. Auto-saved to: " + KeywordsFilePath;
-            lblCustomKeywordsHelp.AutoSize = true;
-            lblCustomKeywordsHelp.Font = new Font("Segoe UI", 8, FontStyle.Italic);
-            lblCustomKeywordsHelp.ForeColor = Color.DarkGray;
-            lblCustomKeywordsHelp.Margin = new Padding(0);
-            customKeywordsContainer.Controls.Add(lblCustomKeywordsHelp, 0, 4);
+            btnClearAll = new Button
+            {
+                Text = "Clear All",
+                Location = new Point(270, 40),
+                Size = new Size(120, 32),
+                Font = new Font("Segoe UI", 9F)
+            };
+            btnClearAll.Click += BtnClearAll_Click;
+            mainSplitContainer.Panel1.Controls.Add(btnClearAll);
 
-            var controlsRow = new TableLayoutPanel
+            // Log input textbox
+            txtLogInput = new TextBox
+            {
+                Multiline = true,
+                ScrollBars = ScrollBars.Both,
+                WordWrap = false,
+                Font = new Font("Consolas", 9F),
+                Location = new Point(10, 80),
+                Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right,
+                Size = new Size(mainSplitContainer.Panel1.Width - 20, mainSplitContainer.Panel1.Height - 90)
+            };
+            mainSplitContainer.Panel1.Controls.Add(txtLogInput);
+
+            // ===== PANEL 2 (BOTTOM): FILTERS + RESULTS AREA =====
+
+            // Status label (at bottom) - ADD FIRST (Dock.Bottom goes to bottom)
+            lblStatus = new Label
+            {
+                Dock = DockStyle.Bottom,
+                Text = "Ready",
+                Height = 30,
+                TextAlign = ContentAlignment.MiddleLeft,
+                Padding = new Padding(10, 0, 0, 0),
+                Font = new Font("Segoe UI", 9F),
+                ForeColor = Color.DarkSlateGray,
+                BackColor = Color.WhiteSmoke
+            };
+            mainSplitContainer.Panel2.Controls.Add(lblStatus);
+
+            // Filter panel (compact layout at top) - ADD SECOND (Dock.Top goes to top)
+            var filterPanel = new Panel
             {
                 Dock = DockStyle.Top,
-                ColumnCount = 2,
-                RowCount = 1,
-                AutoSize = true,
-                Margin = new Padding(0, 0, 0, 10),
+                Height = 90,  // Reduced to 90 for better space
+                Padding = new Padding(10),
+                BackColor = Color.WhiteSmoke
             };
 
-            controlsRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            controlsRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            root.Controls.Add(controlsRow, 0, 3);
-
-            var buttonsPanel = new FlowLayoutPanel
+            // Keyword filter
+            var lblKeyword = new Label
             {
+                Text = "Keyword Filter (comma/space/newline separated):",
+                Location = new Point(10, 10),
                 AutoSize = true,
-                FlowDirection = FlowDirection.LeftToRight,
-                WrapContents = false,
-                Margin = new Padding(0),
-                Padding = new Padding(0),
+                Font = new Font("Segoe UI", 9F, FontStyle.Bold)
             };
-            controlsRow.Controls.Add(buttonsPanel, 0, 0);
+            filterPanel.Controls.Add(lblKeyword);
 
-            btnAnalyze.Text = "Analyze";
-            btnAnalyze.Size = new Size(110, 34);
+            txtKeywordFilter = new TextBox
+            {
+                Location = new Point(10, 35),
+                Size = new Size(350, 20),
+                Font = new Font("Segoe UI", 9F)
+            };
+            txtKeywordFilter.TextChanged += TxtKeywordFilter_TextChanged;
+            txtKeywordFilter.KeyDown += TxtKeywordFilter_KeyDown;
+            filterPanel.Controls.Add(txtKeywordFilter);
 
-            btnLoadFile.Text = "Load File";
-            btnLoadFile.Size = new Size(110, 34);
+            chkIncludeNonFindings = new CheckBox
+            {
+                Text = "Include non-finding matches",
+                Location = new Point(370, 35),
+                AutoSize = true,
+                Checked = true,
+                Font = new Font("Segoe UI", 9F)
+            };
+            chkIncludeNonFindings.CheckedChanged += ChkIncludeNonFindings_CheckedChanged;
+            filterPanel.Controls.Add(chkIncludeNonFindings);
 
-            btnClear.Text = "Clear All";
-            btnClear.Size = new Size(110, 34);
+            // Severity filters
+            var lblSeverity = new Label
+            {
+                Text = "Severity:",
+                Location = new Point(10, 60),
+                AutoSize = true,
+                Font = new Font("Segoe UI", 9F, FontStyle.Bold)
+            };
+            filterPanel.Controls.Add(lblSeverity);
 
-            buttonsPanel.Controls.Add(btnAnalyze);
-            buttonsPanel.Controls.Add(btnLoadFile);
-            buttonsPanel.Controls.Add(btnClear);
+            chkCritical = new CheckBox
+            {
+                Text = "Critical",
+                Location = new Point(80, 60),
+                AutoSize = true,
+                Checked = true,
+                Font = new Font("Segoe UI", 9F)
+            };
+            chkCritical.CheckedChanged += SeverityFilter_CheckedChanged;
+            filterPanel.Controls.Add(chkCritical);
 
-            var filtersPanel = new FlowLayoutPanel
+            chkError = new CheckBox
+            {
+                Text = "Error",
+                Location = new Point(170, 60),
+                AutoSize = true,
+                Checked = true,
+                Font = new Font("Segoe UI", 9F)
+            };
+            chkError.CheckedChanged += SeverityFilter_CheckedChanged;
+            filterPanel.Controls.Add(chkError);
+
+            chkWarning = new CheckBox
+            {
+                Text = "Warning",
+                Location = new Point(240, 60),
+                AutoSize = true,
+                Checked = true,
+                Font = new Font("Segoe UI", 9F)
+            };
+            chkWarning.CheckedChanged += SeverityFilter_CheckedChanged;
+            filterPanel.Controls.Add(chkWarning);
+
+            chkSuccess = new CheckBox
+            {
+                Text = "Success",
+                Location = new Point(330, 60),
+                AutoSize = true,
+                Checked = true,
+                Font = new Font("Segoe UI", 9F)
+            };
+            chkSuccess.CheckedChanged += SeverityFilter_CheckedChanged;
+            filterPanel.Controls.Add(chkSuccess);
+
+            mainSplitContainer.Panel2.Controls.Add(filterPanel);
+
+            // Results DataGridView (fills remaining space) - ADD LAST (Dock.Fill takes remaining space)
+            dgvResults = new DataGridView
             {
                 Dock = DockStyle.Fill,
-                AutoSize = true,
-                FlowDirection = FlowDirection.LeftToRight,
-                WrapContents = true,
-                Margin = new Padding(18, 6, 0, 0),
-                Padding = new Padding(0),
-            };
-            controlsRow.Controls.Add(filtersPanel, 1, 0);
-
-            chkShowCritical.Text = "Show Critical";
-            chkShowCritical.Checked = true;
-            chkShowCritical.AutoSize = true;
-            chkShowCritical.ForeColor = Color.DarkRed;
-
-            chkShowErrors.Text = "Show Errors";
-            chkShowErrors.Checked = true;
-            chkShowErrors.AutoSize = true;
-
-            chkShowWarnings.Text = "Show Warnings";
-            chkShowWarnings.Checked = true;
-            chkShowWarnings.AutoSize = true;
-
-            chkShowSuccess.Text = "Show Success";
-            chkShowSuccess.Checked = true;
-            chkShowSuccess.AutoSize = true;
-
-            chkShowInfo.Text = "Show Info";
-            chkShowInfo.Checked = true;
-            chkShowInfo.AutoSize = true;
-            chkShowInfo.ForeColor = Color.DarkBlue;
-
-            filtersPanel.Controls.Add(chkShowCritical);
-            filtersPanel.Controls.Add(chkShowErrors);
-            filtersPanel.Controls.Add(chkShowWarnings);
-            filtersPanel.Controls.Add(chkShowSuccess);
-            filtersPanel.Controls.Add(chkShowInfo);
-
-            lblActiveFilters.Text = "";
-            lblActiveFilters.AutoSize = true;
-            lblActiveFilters.Font = new Font("Segoe UI", 8, FontStyle.Italic);
-            lblActiveFilters.ForeColor = Color.DarkGray;
-            lblActiveFilters.Margin = new Padding(12, 0, 0, 0);
-            filtersPanel.Controls.Add(lblActiveFilters);
-
-            lblFilterWarning.Text = "";
-            lblFilterWarning.AutoSize = true;
-            lblFilterWarning.Font = new Font("Segoe UI", 8, FontStyle.Bold);
-            lblFilterWarning.ForeColor = Color.DarkOrange;
-            lblFilterWarning.Margin = new Padding(12, 0, 0, 0);
-            filtersPanel.Controls.Add(lblFilterWarning);
-
-            var resultsContainer = new TableLayoutPanel
-            {
-                Dock = DockStyle.Fill,
-                ColumnCount = 1,
-                RowCount = 2,
-                Margin = new Padding(0),
-                Padding = new Padding(0),
-            };
-            resultsContainer.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            resultsContainer.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            root.Controls.Add(resultsContainer, 0, 4);
-
-            ConfigureResultsGrid();
-            resultsContainer.Controls.Add(dgvResults, 0, 0);
-
-            lblSummary.AutoSize = true;
-            lblSummary.Font = new Font("Segoe UI", 9, FontStyle.Regular);
-            lblSummary.Margin = new Padding(0, 8, 0, 0);
-            resultsContainer.Controls.Add(lblSummary, 0, 1);
-        }
-
-        private void ConfigureResultsGrid()
-        {
-            dgvResults.Dock = DockStyle.Fill;
-            dgvResults.ReadOnly = true;
-            dgvResults.AllowUserToAddRows = false;
-            dgvResults.AllowUserToDeleteRows = false;
-            dgvResults.AllowUserToResizeRows = false;
-            dgvResults.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
-            dgvResults.MultiSelect = false;
-            dgvResults.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
-            dgvResults.Columns.Clear();
-
-            var colLine = new DataGridViewTextBoxColumn
-            {
-                Name = "colLine",
-                HeaderText = "Line",
-                FillWeight = 12
+                AutoGenerateColumns = false,
+                AllowUserToAddRows = false,
+                AllowUserToDeleteRows = false,
+                ReadOnly = true,
+                SelectionMode = DataGridViewSelectionMode.FullRowSelect,
+                MultiSelect = false,
+                RowHeadersVisible = false,
+                ColumnHeadersVisible = true,
+                BackgroundColor = Color.White,
+                GridColor = Color.LightGray,
+                BorderStyle = BorderStyle.Fixed3D,
+                AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.None,
+                AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.AllCells,
+                AllowUserToResizeRows = false,
+                AllowUserToResizeColumns = true,
+                ScrollBars = ScrollBars.Both,
+                ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.AutoSize,
+                EnableHeadersVisualStyles = false
             };
 
-            var colSeverity = new DataGridViewTextBoxColumn
-            {
-                Name = "colSeverity",
-                HeaderText = "Severity",
-                FillWeight = 18
-            };
+            typeof(DataGridView).InvokeMember("DoubleBuffered",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.SetProperty,
+                null, dgvResults, new object[] { true });
 
-            var colCode = new DataGridViewTextBoxColumn
-            {
-                Name = "colCode",
-                HeaderText = "Code",
-                FillWeight = 18
-            };
+            dgvResults.DefaultCellStyle.WrapMode = DataGridViewTriState.False;
+            dgvResults.DefaultCellStyle.Font = new Font("Consolas", 9F);
+            dgvResults.DefaultCellStyle.Padding = new Padding(4, 2, 4, 2);
+            dgvResults.ColumnHeadersDefaultCellStyle.WrapMode = DataGridViewTriState.False;
+            dgvResults.ColumnHeadersDefaultCellStyle.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
+            dgvResults.ColumnHeadersDefaultCellStyle.Padding = new Padding(4, 2, 4, 2);
 
-            var colMessage = new DataGridViewTextBoxColumn
-            {
-                Name = "colMessage",
-                HeaderText = "Message",
-                FillWeight = 52
-            };
-
-            dgvResults.Columns.AddRange(colLine, colSeverity, colCode, colMessage);
-        }
-
-        // =======================================================
-        // USER ACTIONS (BUTTON HANDLERS)
-        // =======================================================
-
-        private void ClearAll()
-        {
-            txtLogInput.Clear();
-            dgvResults.Rows.Clear();
-            _allFindings.Clear();
-            _lastResult = null;
-            _lastLines = null;
-            UpdateSummary(0, 0, 0, 0, 0, 0, 0);
-            lblActiveFilters.Text = "";
-            lblFilterWarning.Text = "";
-            UpdateKeywordFilterStatus(0, 0, 0);
-        }
-
-        private void ClearKeywords()
-        {
-            txtCustomKeywords.Clear();
-            _customKeywords.Clear();
-            SaveKeywords();
-            ApplyFiltersAndBind();
-        }
-
-        private void LoadFromFile()
-        {
-            using (var ofd = new OpenFileDialog
-            {
-                Title = "Select a log file",
-                Filter = "Log/Text files (*.log;*.txt)|*.log;*.txt|All files (*.*)|*.*"
-            })
-            {
-                if (ofd.ShowDialog(this) != DialogResult.OK) return;
-
-                try
-                {
-                    txtLogInput.Text = File.ReadAllText(ofd.FileName);
+            dgvResults.Columns.Add(new DataGridViewTextBoxColumn 
+            { 
+                Name = "colLineNumber", 
+                HeaderText = "Line #", 
+                DataPropertyName = "LineNumber",
+                AutoSizeMode = DataGridViewAutoSizeColumnMode.DisplayedCells,
+                MinimumWidth = 60,
+                DefaultCellStyle = new DataGridViewCellStyle 
+                { 
+                    WrapMode = DataGridViewTriState.False,
+                    Alignment = DataGridViewContentAlignment.MiddleRight
                 }
-                catch (Exception ex)
+            });
+
+            dgvResults.Columns.Add(new DataGridViewTextBoxColumn 
+            { 
+                Name = "colCode", 
+                HeaderText = "Code", 
+                DataPropertyName = "Code",
+                AutoSizeMode = DataGridViewAutoSizeColumnMode.DisplayedCells,
+                MinimumWidth = 70,
+                DefaultCellStyle = new DataGridViewCellStyle { WrapMode = DataGridViewTriState.False }
+            });
+
+            dgvResults.Columns.Add(new DataGridViewTextBoxColumn 
+            { 
+                Name = "colSeverity", 
+                HeaderText = "Severity", 
+                DataPropertyName = "Severity",
+                AutoSizeMode = DataGridViewAutoSizeColumnMode.DisplayedCells,
+                MinimumWidth = 80,
+                DefaultCellStyle = new DataGridViewCellStyle { WrapMode = DataGridViewTriState.False }
+            });
+
+            dgvResults.Columns.Add(new DataGridViewTextBoxColumn 
+            { 
+                Name = "colTitle", 
+                HeaderText = "Title", 
+                DataPropertyName = "Title",
+                AutoSizeMode = DataGridViewAutoSizeColumnMode.DisplayedCells,
+                MinimumWidth = 150,
+                DefaultCellStyle = new DataGridViewCellStyle { WrapMode = DataGridViewTriState.False }
+            });
+
+            dgvResults.Columns.Add(new DataGridViewTextBoxColumn 
+            { 
+                Name = "colLineText", 
+                HeaderText = "Line Text", 
+                DataPropertyName = "LineText",
+                AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill,
+                MinimumWidth = 300,
+                DefaultCellStyle = new DataGridViewCellStyle { WrapMode = DataGridViewTriState.True }
+            });
+
+            dgvResults.DataSource = resultsBindingSource;
+
+            dgvResults.CellFormatting += (s, e) =>
+            {
+                if (e.RowIndex >= 0 && e.RowIndex < displayedRows.Count)
                 {
-                    MessageBox.Show(this, $"Could not read file.\n\n{ex.Message}", "Load Error",
-                        MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    var row = displayedRows[e.RowIndex];
+                    var dgvRow = dgvResults.Rows[e.RowIndex];
+                    dgvRow.DefaultCellStyle.BackColor = row.RowColor;
+                    dgvRow.DefaultCellStyle.ForeColor = Color.Black;
+                    dgvRow.DefaultCellStyle.SelectionBackColor = Color.FromArgb(200, row.RowColor);
+                    dgvRow.DefaultCellStyle.SelectionForeColor = Color.Black;
                 }
-            }
+            };
+
+            mainSplitContainer.Panel2.Controls.Add(dgvResults);
+            dgvResults.BringToFront();
         }
 
-        // =======================================================
-        // KEYWORD PERSISTENCE
-        // =======================================================
-
-        /// <summary>
-        /// Loads persisted keywords from AppData and populates the textbox ONCE at startup.
-        /// </summary>
-        private void LoadKeywords()
+        private void BtnAnalyze_Click(object? sender, EventArgs e)
         {
             try
             {
-                if (!File.Exists(KeywordsFilePath))
+                // Read FULL log text without truncation
+                string logText = txtLogInput.Text;
+                if (string.IsNullOrWhiteSpace(logText))
                 {
-                    _customKeywords.Clear();
-                    UpdateKeywordFilterStatus(0, 0, 0);
+                    MessageBox.Show("Please paste a log into the input box.", "No Input", MessageBoxButtons.OK, MessageBoxIcon.Information);
                     return;
                 }
 
-                var json = File.ReadAllText(KeywordsFilePath);
-                var data = JsonSerializer.Deserialize<KeywordsData>(json);
+                // Normalize line endings: replace \r\n and \r with \n
+                logText = logText.Replace("\r\n", "\n").Replace("\r", "\n");
 
-                if (data?.Keywords != null && data.Keywords.Count > 0)
-                {
-                    _customKeywords = data.Keywords;
-                    // Set textbox ONCE at startup - no caret issues
-                    txtCustomKeywords.Text = string.Join(" ", _customKeywords);
-                    UpdateKeywordFilterStatus(_customKeywords.Count, 0, 0);
-                }
-                else
-                {
-                    _customKeywords.Clear();
-                    UpdateKeywordFilterStatus(0, 0, 0);
-                }
+                // Remove non-printable characters that can break matching (except tabs and newlines)
+                logText = new string(logText.Where(c => c == '\n' || c == '\t' || (c >= 32 && c < 127) || c >= 128).ToArray());
+
+                // Split into lines
+                string[] lines = logText.Split(new char[] { '\n' }, StringSplitOptions.None);
+
+                // Run analysis
+                currentResult = analyzer.Analyze(lines, null);
+
+                // Update status with detailed information
+                lblStatus.Text = string.Format("Parsed: {0} lines | All Lines Tracked: {1} | Findings: {2} | Critical: {3} | Error: {4} | Warning: {5} | Success: {6}",
+                    currentResult.TotalLines,
+                    currentResult.AllLines.Count,
+                    currentResult.Findings.Count,
+                    currentResult.CriticalCount,
+                    currentResult.ErrorCount,
+                    currentResult.WarningCount,
+                    currentResult.SuccessCount);
+
+                // Apply filters and display
+                ApplyFiltersAndDisplay();
+
+                // Run validation (optional, for debugging)
+                analyzer.ValidateKeywordMatching();
             }
             catch (Exception ex)
             {
-                MessageBox.Show(this,
-                    $"Could not load keywords from {KeywordsFilePath}.\n\n{ex.Message}",
-                    "Load Keywords Error",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Warning);
-
-                _customKeywords.Clear();
-                UpdateKeywordFilterStatus(0, 0, 0);
+                MessageBox.Show("Error during analysis: " + ex.Message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
-        /// <summary>
-        /// Saves keywords to AppData. Called on debounced TextChanged and Leave events.
-        /// </summary>
-        private void SaveKeywords()
+        private void TxtKeywordFilter_TextChanged(object? sender, EventArgs e)
+        {
+            // Re-apply filters without re-running analysis
+            if (currentResult != null)
+            {
+                ApplyFiltersAndDisplay();
+            }
+        }
+
+        private void TxtKeywordFilter_KeyDown(object? sender, KeyEventArgs e)
+        {
+            // DO NOT intercept Space key - let it work normally
+            // This fixes the caret jumping bug
+        }
+
+        // 1. CORRECTED FILE LOAD METHOD
+        private void BtnLoadFile_Click(object? sender, EventArgs e)
         {
             try
             {
-                if (_customKeywords.Count == 0)
+                using var openFileDialog = new OpenFileDialog
                 {
-                    if (File.Exists(KeywordsFilePath))
+                    Filter = "Log/Text Files (*.log;*.txt)|*.log;*.txt|All Files (*.*)|*.*",
+                    Title = "Select Log File",
+                    Multiselect = false
+                };
+
+                if (openFileDialog.ShowDialog() == DialogResult.OK)
+                {
+                    string filePath = openFileDialog.FileName;
+                    var fileInfo = new System.IO.FileInfo(filePath);
+
+                    if (fileInfo.Length > 5_242_880)
                     {
-                        File.Delete(KeywordsFilePath);
+                        var result = MessageBox.Show(
+                            string.Format("The selected file is {0:N2} MB. Large files may take time to load and process.\n\nDo you want to continue?",
+                                fileInfo.Length / 1024.0 / 1024.0),
+                            "Large File Warning",
+                            MessageBoxButtons.YesNo,
+                            MessageBoxIcon.Warning);
+
+                        if (result != DialogResult.Yes)
+                            return;
                     }
-                    return;
+
+                    // BOM-aware encoding detection
+                    using var reader = new System.IO.StreamReader(filePath, System.Text.Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+                    string content = reader.ReadToEnd();
+
+                    txtLogInput.Text = content;
+
+                    string[] lines = content.Split(new string[] { "\r\n", "\n" }, StringSplitOptions.None);
+                    lblLoadedFile.Text = string.Format("Loaded: {0} ({1:N0} lines)", 
+                        System.IO.Path.GetFileName(filePath), 
+                        lines.Length);
+
+                    lblStatus.Text = string.Format("File loaded: {0} lines ready for analysis", lines.Length);
+
+                    currentResult = null;
+                    displayedRows.Clear();
                 }
-
-                Directory.CreateDirectory(AppDataFolder);
-
-                var data = new KeywordsData { Keywords = _customKeywords };
-                var json = JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true });
-
-                File.WriteAllText(KeywordsFilePath, json);
             }
             catch (Exception ex)
             {
-                MessageBox.Show(this,
-                    $"Could not save keywords to {KeywordsFilePath}.\n\n{ex.Message}",
-                    "Save Keywords Error",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Warning);
+                MessageBox.Show("Error loading file: " + ex.Message, "Load Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
-        // =======================================================
-        // KEYWORD PARSING
-        // =======================================================
-
-        /// <summary>
-        /// Parses custom keywords from raw text input.
-        /// Supports multiple separators: newline, comma, semicolon, space, tab.
-        /// Supports quoted phrases: "secure boot" is treated as one token.
-        /// Returns distinct, trimmed, non-empty keywords (case-insensitive comparison).
-        /// </summary>
-        private List<string> ParseCustomKeywords(string raw)
+        private void BtnClearAll_Click(object? sender, EventArgs e)
         {
-            if (string.IsNullOrWhiteSpace(raw))
-                return new List<string>();
+            // Clear log input
+            txtLogInput.Clear();
 
-            var tokens = new List<string>();
-            
-            // Regex to match quoted phrases OR individual tokens
-            // Pattern: "quoted phrase" OR non-separator characters
-            var regex = new Regex(@"""([^""]*)""|([^\s,;\r\n\t]+)", RegexOptions.Compiled);
+            // Clear results
+            displayedRows.Clear();
 
-            foreach (Match match in regex.Matches(raw))
+            // Clear analysis result
+            currentResult = null;
+
+            // Clear keyword filter
+            txtKeywordFilter.Clear();
+
+            // Reset status
+            lblStatus.Text = "Ready";
+            lblLoadedFile.Text = "";
+
+            // Reset checkboxes to default
+            chkCritical.Checked = true;
+            chkError.Checked = true;
+            chkWarning.Checked = true;
+            chkSuccess.Checked = true;
+            chkIncludeNonFindings.Checked = true;
+        }
+
+        private void ChkIncludeNonFindings_CheckedChanged(object? sender, EventArgs e)
+        {
+            if (currentResult != null)
             {
-                string token = match.Groups[1].Success
-                    ? match.Groups[1].Value.Trim()  // Quoted phrase
-                    : match.Groups[2].Value.Trim(); // Unquoted token
-
-                // Clean up trailing punctuation (but keep internal punctuation)
-                token = token.TrimEnd(',', '.', ';', ':', '!', '?', '-', '_');
-
-                // Ignore empty and single-character tokens to reduce noise
-                if (!string.IsNullOrWhiteSpace(token) && token.Length > 1)
-                {
-                    tokens.Add(token);
-                }
+                ApplyFiltersAndDisplay();
             }
-
-            // Return distinct tokens (case-insensitive) in alphabetical order
-            return tokens
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .OrderBy(t => t, StringComparer.OrdinalIgnoreCase)
-                .ToList();
         }
 
-        /// <summary>
-        /// Checks if a finding matches ANY of the given keywords (case-insensitive substring).
-        /// Searches in: LineText, Title, Code, Severity, and raw log line.
-        /// Uses OR logic: if ANY keyword matches ANY field, returns true.
-        /// </summary>
-        private bool FindingMatchesAnyKeyword(Finding finding, IReadOnlyList<string> keywords)
+        private void SeverityFilter_CheckedChanged(object? sender, EventArgs e)
         {
-            if (keywords == null || keywords.Count == 0)
-                return true; // No keywords = show all
-
-            // Build searchable text from finding fields
-            string lineText = finding.LineText ?? string.Empty;
-            string title = finding.Title ?? string.Empty;
-            string code = finding.Code ?? string.Empty;
-            string severity = finding.Severity.ToString();
-
-            // Also search the raw log line if available
-            string rawLine = string.Empty;
-            if (_lastLines != null && finding.LineNumber > 0 && finding.LineNumber <= _lastLines.Length)
+            if (currentResult != null)
             {
-                rawLine = _lastLines[finding.LineNumber - 1];
+                ApplyFiltersAndDisplay();
             }
-
-            // Check if ANY keyword matches ANY field (OR logic)
-            return keywords.Any(keyword =>
-                lineText.IndexOf(keyword, StringComparison.OrdinalIgnoreCase) >= 0 ||
-                title.IndexOf(keyword, StringComparison.OrdinalIgnoreCase) >= 0 ||
-                code.IndexOf(keyword, StringComparison.OrdinalIgnoreCase) >= 0 ||
-                severity.IndexOf(keyword, StringComparison.OrdinalIgnoreCase) >= 0 ||
-                rawLine.IndexOf(keyword, StringComparison.OrdinalIgnoreCase) >= 0);
         }
 
-        /// <summary>
-        /// Checks if a finding's severity is allowed by current checkbox filters.
-        /// Uses INCLUSIVE logic: each checkbox adds that severity to allowed set.
-        /// </summary>
-        private bool IsSeverityAllowed(FindingSeverity severity)
+        private void ApplyFiltersAndDisplay()
         {
-            return (chkShowCritical.Checked && severity == FindingSeverity.Critical) ||
-                   (chkShowErrors.Checked && severity == FindingSeverity.Error) ||
-                   (chkShowWarnings.Checked && severity == FindingSeverity.Warning) ||
-                   (chkShowSuccess.Checked && severity == FindingSeverity.Success) ||
-                   (chkShowInfo.Checked && severity == FindingSeverity.Info);
-        }
-
-        // =======================================================
-        // ANALYSIS & FILTERING LOGIC
-        // =======================================================
-
-        private void AnalyzeWithDll()
-        {
-            string logText = txtLogInput.Text;
-
-            if (string.IsNullOrWhiteSpace(logText))
-            {
-                MessageBox.Show(this, "Please enter or load log data first.", "No Input",
-                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+            if (currentResult == null)
                 return;
+
+            System.Diagnostics.Debug.WriteLine($"==== ApplyFiltersAndDisplay START ====");
+
+            // Build the list of rows to display
+            var rowsToDisplay = BuildDisplayedRows();
+
+            System.Diagnostics.Debug.WriteLine($"BuildDisplayedRows returned: {rowsToDisplay.Count} rows");
+
+            // Update the binding source
+            resultsBindingSource.RaiseListChangedEvents = false;
+            displayedRows.Clear();
+
+            foreach (var row in rowsToDisplay)
+            {
+                displayedRows.Add(row);
             }
 
-            try
+            System.Diagnostics.Debug.WriteLine($"displayedRows.Count after add: {displayedRows.Count}");
+
+            resultsBindingSource.RaiseListChangedEvents = true;
+            resultsBindingSource.ResetBindings(false);
+
+            // Force binding context refresh
+            if (dgvResults.DataSource != null && BindingContext != null)
             {
-                _lastLines = logText.Split(LineSeparators, StringSplitOptions.None);
-
-                var analyzer = new LogAnalyzer();
-                // Analyze WITHOUT keyword filtering - that's done in display layer
-                _lastResult = analyzer.Analyze(_lastLines, null);
-
-                // Store master findings list (single source of truth)
-                _allFindings = _lastResult.Findings?.ToList() ?? new List<Finding>();
-
-                // Apply filters and bind to grid (does NOT re-run analysis)
-                ApplyFiltersAndBind();
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show(this, $"Analysis failed.\n\n{ex.Message}", "Analysis Error",
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
-        }
-
-        private void OnKeywordsChanged()
-        {
-            // Parse keywords WITHOUT modifying the textbox text (prevents caret jump!)
-            _customKeywords = ParseCustomKeywords(txtCustomKeywords.Text);
-
-            // Save to disk
-            SaveKeywords();
-
-            // Re-filter and display (does NOT re-run analysis)
-            ApplyFiltersAndBind();
-        }
-
-        /// <summary>
-        /// Single source of truth for filtering and binding.
-        /// Applies severity filters, keyword filters, and binds to DataGridView.
-        /// Called by: Analyze, checkbox changes, keyword changes.
-        /// Does NOT re-run analysis - only filters existing _allFindings.
-        /// </summary>
-        private void ApplyFiltersAndBind()
-        {
-            dgvResults.Rows.Clear();
-            lblFilterWarning.Text = "";
-
-            if (_allFindings == null || _allFindings.Count == 0)
-            {
-                UpdateDisplaySummary(0, 0, 0);
-                return;
-            }
-
-            // Parse current keywords from textbox
-            var keywords = _customKeywords ?? new List<string>();
-            bool hasKeywords = keywords.Count > 0;
-
-            // Check which severity toggles are ON (INCLUSIVE logic)
-            bool anySeverityChecked = chkShowCritical.Checked ||
-                                     chkShowErrors.Checked ||
-                                     chkShowWarnings.Checked ||
-                                     chkShowSuccess.Checked ||
-                                     chkShowInfo.Checked;
-
-            bool keywordOverride = chkKeywordOverride.Checked;
-
-            // PHASE 1: Apply keyword filter to get matched count (before severity)
-            List<Finding> keywordMatched;
-            if (hasKeywords)
-            {
-                keywordMatched = _allFindings
-                    .Where(f => FindingMatchesAnyKeyword(f, keywords))
-                    .ToList();
-            }
-            else
-            {
-                keywordMatched = _allFindings.ToList();
-            }
-
-            // PHASE 2: Apply display filtering based on override mode
-            List<Finding> filtered;
-
-            if (hasKeywords && keywordOverride)
-            {
-                // Override mode: show ALL keyword matches regardless of severity toggles
-                filtered = keywordMatched;
-            }
-            else if (hasKeywords && !keywordOverride && anySeverityChecked)
-            {
-                // Normal mode: keyword matches AND severity allowed (AND logic)
-                filtered = keywordMatched.Where(f => IsSeverityAllowed(f.Severity)).ToList();
-            }
-            else if (hasKeywords && !keywordOverride && !anySeverityChecked)
-            {
-                // Keywords ON, override OFF, all severities OFF: show nothing
-                filtered = new List<Finding>();
-            }
-            else if (!hasKeywords && anySeverityChecked)
-            {
-                // No keywords, severity filters active: apply severity only
-                filtered = _allFindings.Where(f => IsSeverityAllowed(f.Severity)).ToList();
-            }
-            else if (!hasKeywords && !anySeverityChecked)
-            {
-                // No keywords, no severities: show nothing
-                filtered = new List<Finding>();
-            }
-            else
-            {
-                // Fallback: show all (shouldn't reach here)
-                filtered = _allFindings.ToList();
-            }
-
-            // PHASE 3: Populate grid with filtered results
-            foreach (var finding in filtered)
-            {
-                dgvResults.Rows.Add(
-                    finding.LineNumber,
-                    finding.Severity.ToString().ToUpperInvariant(),
-                    finding.Code ?? string.Empty,
-                    finding.LineText ?? string.Empty
-                );
-            }
-
-            // PHASE 4: Show warning if matches are hidden by severity filters
-            if (hasKeywords && !keywordOverride && anySeverityChecked && keywordMatched.Count > 0 && filtered.Count == 0)
-            {
-                lblFilterWarning.Text = "⚠ All keyword matches are hidden by severity filters. Enable more severity checkboxes or turn on override.";
-            }
-            else if (hasKeywords && !keywordOverride && anySeverityChecked && filtered.Count < keywordMatched.Count)
-            {
-                int hidden = keywordMatched.Count - filtered.Count;
-                lblFilterWarning.Text = $"⚠ {hidden} keyword match(es) hidden by severity filters.";
-            }
-            else if (hasKeywords && !keywordOverride && !anySeverityChecked && keywordMatched.Count > 0)
-            {
-                lblFilterWarning.Text = $"⚠ {keywordMatched.Count} keyword match(es) found but all severity filters are OFF. Enable severities or turn on override.";
+                var cm = (CurrencyManager)BindingContext[dgvResults.DataSource];
+                cm.Refresh();
             }
 
             // Force grid refresh
+            dgvResults.Invalidate();
             dgvResults.Refresh();
+            dgvResults.Update();
 
-            // Update UI status labels
-            UpdateDisplaySummary(_allFindings.Count, keywordMatched.Count, filtered.Count);
-            UpdateKeywordFilterStatus(keywords.Count, keywordMatched.Count, filtered.Count);
-            UpdateActiveFiltersLabel(anySeverityChecked);
+            // Debug logging
+            System.Diagnostics.Debug.WriteLine($"==== BINDING UPDATE ====");
+            System.Diagnostics.Debug.WriteLine($"BindingList count: {displayedRows.Count}");
+            System.Diagnostics.Debug.WriteLine($"Grid rows count: {dgvResults.Rows.Count}");
+            System.Diagnostics.Debug.WriteLine($"Grid visible: {dgvResults.Visible}, Enabled: {dgvResults.Enabled}");
+            System.Diagnostics.Debug.WriteLine($"Grid Bounds: {dgvResults.Bounds}");
+            System.Diagnostics.Debug.WriteLine($"Columns count: {dgvResults.Columns.Count}");
+            if (dgvResults.Columns.Count > 0)
+            {
+                System.Diagnostics.Debug.WriteLine($"Column 0 width: {dgvResults.Columns[0].Width}, visible: {dgvResults.Columns[0].Visible}");
+                System.Diagnostics.Debug.WriteLine($"ColumnHeadersVisible: {dgvResults.ColumnHeadersVisible}");
+                System.Diagnostics.Debug.WriteLine($"ColumnHeadersHeight: {dgvResults.ColumnHeadersHeight}");
+            }
+
+            // Update status
+            lblStatus.Text += string.Format(" | Displayed: {0} rows", displayedRows.Count);
+
+            System.Diagnostics.Debug.WriteLine($"==== ApplyFiltersAndDisplay END ====");
         }
 
-        private void UpdateKeywordFilterStatus(int keywordCount, int matchedCount, int displayedCount)
+        // 2. ENHANCED SANITIZER METHOD
+        private string SanitizeForGrid(string? input)
         {
-            if (keywordCount > 0)
-            {
-                string keywordList = string.Join(", ", _customKeywords.Take(5));
-                if (_customKeywords.Count > 5)
-                    keywordList += ", ...";
+            if (input == null || input.Length == 0)
+                return string.Empty;
 
-                lblKeywordFilterStatus.Text = $"Custom keyword filter: ON ({keywordCount} keywords: {keywordList}) — Matched: {matchedCount} — Displayed: {displayedCount}";
-                lblKeywordFilterStatus.ForeColor = matchedCount > 0 ? Color.DarkGreen : Color.DarkOrange;
+            // Remove null characters first
+            var sanitized = input.Replace("\0", "");
+
+            // Replace tabs, newlines, and carriage returns with spaces
+            sanitized = sanitized.Replace('\t', ' ')
+                                 .Replace('\n', ' ')
+                                 .Replace('\r', ' ');
+
+            // Remove all control characters except space (ASCII 32)
+            // Keep printable ASCII (32-126) and extended Unicode (>= 128)
+            var chars = sanitized.Where(c => 
+                c == ' ' || 
+                (c >= 32 && c <= 126) || 
+                c >= 128
+            ).ToArray();
+            
+            sanitized = new string(chars);
+
+            // Collapse multiple spaces to single space
+            while (sanitized.Contains("  "))
+                sanitized = sanitized.Replace("  ", " ");
+
+            return sanitized.Trim();
+        }
+
+        private List<ResultRow> BuildDisplayedRows()
+        {
+            var result = new List<ResultRow>();
+
+            if (currentResult == null)
+                return result;
+
+            // Parse keywords
+            string[] keywords = ParseKeywords(txtKeywordFilter.Text);
+
+            System.Diagnostics.Debug.WriteLine($"==== BuildDisplayedRows ====");
+            System.Diagnostics.Debug.WriteLine($"Total AllLines: {currentResult.AllLines.Count}");
+            System.Diagnostics.Debug.WriteLine($"Keywords: [{string.Join(", ", keywords)}] Count: {keywords.Length}");
+
+            // 3. UPDATED BINDING IN BuildDisplayedRows - KEYWORD MODE
+            if (keywords.Length > 0)
+            {
+                int matchCount = 0;
+
+                foreach (var logLine in currentResult.AllLines)
+                {
+                    bool matches = keywords.Any(kw => 
+                        logLine.RawText.IndexOf(kw, StringComparison.OrdinalIgnoreCase) >= 0);
+
+                    if (matches)
+                    {
+                        matchCount++;
+
+                        FindingSeverity severity = logLine.DetectedSeverity;
+                        string code = logLine.IsFinding ? "FINDING" : "KEYWORD";
+
+                        Color rowColor = severity switch
+                        {
+                            FindingSeverity.Critical => Color.LightCoral,
+                            FindingSeverity.Error => Color.LightSalmon,
+                            FindingSeverity.Warning => Color.LightYellow,
+                            FindingSeverity.Success => Color.LightGreen,
+                            FindingSeverity.Info => Color.LightCyan,
+                            _ => Color.White
+                        };
+
+                        string rawText = logLine.RawText ?? "";
+                        string title = SanitizeForGrid(rawText);
+                        if (title.Length > 80)
+                            title = title.Substring(0, 77) + "...";
+
+                        string lineText = SanitizeForGrid(rawText);
+
+                        result.Add(new ResultRow
+                        {
+                            LineNumber = logLine.LineNumber,
+                            Code = SanitizeForGrid(code),
+                            Severity = SanitizeForGrid(severity.ToString()),
+                            Title = title,
+                            LineText = lineText,
+                            RowColor = rowColor
+                        });
+                    }
+                }
+
+                System.Diagnostics.Debug.WriteLine($"Keyword matches: {matchCount}");
+                lblStatus.Text = string.Format("Keyword Search: {0} lines scanned | {1} matches found | Keywords: [{2}]",
+                    currentResult.AllLines.Count,
+                    matchCount,
+                    string.Join(", ", keywords));
             }
+
+            // 4. UPDATED BINDING IN BuildDisplayedRows - NORMAL MODE
             else
             {
-                lblKeywordFilterStatus.Text = "Custom keyword filter: OFF";
-                lblKeywordFilterStatus.ForeColor = Color.DarkGray;
+                bool anySeveritySelected = chkCritical.Checked || chkError.Checked || 
+                                      chkWarning.Checked || chkSuccess.Checked;
+
+                List<Finding> findingsToShow;
+
+                if (chkIncludeNonFindings.Checked)
+                {
+                    findingsToShow = currentResult.Findings.ToList();
+
+                    var nonFindings = currentResult.AllLines
+                        .Where(line => !line.IsFinding)
+                        .Select(line => new Finding
+                        {
+                            LineNumber = line.LineNumber,
+                            Severity = line.DetectedSeverity,
+                            LineText = (line.RawText ?? "").Trim(),
+                            Title = (line.RawText ?? "").Trim().Length > 80 ? 
+                                   (line.RawText ?? "").Trim().Substring(0, 77) + "..." : 
+                                   (line.RawText ?? "").Trim(),
+                            Code = "INFO",
+                            RuleId = $"LINE_{line.LineNumber}",
+                            Evidence = (line.RawText ?? "").Trim(),
+                            WhyItMatters = "Non-finding log line"
+                        });
+
+                    findingsToShow.AddRange(nonFindings);
+                    findingsToShow = findingsToShow.OrderBy(f => f.LineNumber).ToList();
+                }
+                else
+                {
+                    findingsToShow = currentResult.Findings.ToList();
+                }
+
+                if (anySeveritySelected)
+                {
+                    findingsToShow = findingsToShow.Where(f =>
+                        (chkCritical.Checked && f.Severity == FindingSeverity.Critical) ||
+                        (chkError.Checked && f.Severity == FindingSeverity.Error) ||
+                        (chkWarning.Checked && f.Severity == FindingSeverity.Warning) ||
+                        (chkSuccess.Checked && f.Severity == FindingSeverity.Success)
+                    ).ToList();
+                }
+                else
+                {
+                    findingsToShow.Clear();
+                    lblStatus.Text = "No filters active. Select severity filters or enter keywords.";
+                }
+
+                System.Diagnostics.Debug.WriteLine($"Findings mode: {findingsToShow.Count} findings");
+
+                // Convert to ResultRow
+                foreach (var finding in findingsToShow)
+                {
+                    Color rowColor = finding.Severity switch
+                    {
+                        FindingSeverity.Critical => Color.LightCoral,
+                        FindingSeverity.Error => Color.LightSalmon,
+                        FindingSeverity.Warning => Color.LightYellow,
+                        FindingSeverity.Success => Color.LightGreen,
+                        FindingSeverity.Info => Color.LightCyan,
+                        _ => Color.White
+                    };
+
+                    string rawTitle = finding.Title ?? finding.LineText ?? "";
+                    string title = SanitizeForGrid(rawTitle);
+                    if (title.Length > 80)
+                        title = title.Substring(0, 77) + "...";
+
+                    string lineText = SanitizeForGrid(finding.LineText ?? "");
+
+                    result.Add(new ResultRow
+                    {
+                        LineNumber = finding.LineNumber,
+                        Code = SanitizeForGrid(finding.Code ?? "UNKNOWN"),
+                        Severity = SanitizeForGrid(finding.Severity.ToString()),
+                        Title = title,
+                        LineText = lineText,
+                        RowColor = rowColor
+                    });
+                }
             }
+
+            System.Diagnostics.Debug.WriteLine($"Total rows to display: {result.Count}");
+            return result;
         }
 
-        private void UpdateActiveFiltersLabel(bool anySeverityChecked)
+        private string[] ParseKeywords(string keywordText)
         {
-            var activeFilters = new List<string>();
-            if (chkShowCritical.Checked) activeFilters.Add("Critical");
-            if (chkShowErrors.Checked) activeFilters.Add("Errors");
-            if (chkShowWarnings.Checked) activeFilters.Add("Warnings");
-            if (chkShowSuccess.Checked) activeFilters.Add("Success");
-            if (chkShowInfo.Checked) activeFilters.Add("Info");
+            if (string.IsNullOrWhiteSpace(keywordText))
+                return Array.Empty<string>();
 
-            if (!anySeverityChecked)
-            {
-                lblActiveFilters.Text = "(No severities selected)";
-                lblActiveFilters.ForeColor = Color.DarkOrange;
-            }
-            else if (activeFilters.Count == 5)
-            {
-                lblActiveFilters.Text = "(All severities shown)";
-                lblActiveFilters.ForeColor = Color.DarkGray;
-            }
-            else
-            {
-                lblActiveFilters.Text = $"(Showing: {string.Join(", ", activeFilters)})";
-                lblActiveFilters.ForeColor = Color.DarkGray;
-            }
-        }
+            // Split by comma, space, semicolon, tab, newline
+            char[] separators = { ',', ' ', ';', '\t', '\r', '\n' };
+            var tokens = keywordText.Split(separators, StringSplitOptions.RemoveEmptyEntries);
 
-        private void UpdateDisplaySummary(int totalFindings, int matchedFindings, int displayedFindings)
-        {
-            if (_lastResult == null)
-            {
-                UpdateSummary(0, 0, 0, 0, 0, 0, 0);
-                return;
-            }
-
-            int totalLines = _lastLines?.Length ?? 0;
-            int criticals = _allFindings.Count(f => f.Severity == FindingSeverity.Critical);
-            int errors = _allFindings.Count(f => f.Severity == FindingSeverity.Error);
-            int warnings = _allFindings.Count(f => f.Severity == FindingSeverity.Warning);
-            int success = _allFindings.Count(f => f.Severity == FindingSeverity.Success);
-            int info = _allFindings.Count(f => f.Severity == FindingSeverity.Info);
-
-            string summaryText = $"Lines: {totalLines} | Critical: {criticals} | Errors: {errors} | Warnings: {warnings} | Success: {success} | Info: {info} | Score: {_lastResult.Score}";
-
-            if (_customKeywords.Count > 0)
-            {
-                summaryText += $" | Keyword Matched: {matchedFindings}";
-            }
-
-            if (displayedFindings < totalFindings)
-            {
-                summaryText += $" | Displayed: {displayedFindings} of {totalFindings} findings";
-            }
-            else if (displayedFindings == totalFindings && totalFindings > 0)
-            {
-                summaryText += $" | Displaying all {displayedFindings} findings";
-            }
-
-            lblSummary.Text = summaryText;
-        }
-
-        private void UpdateSummary(int totalLines, int criticals, int errors, int warnings, int success, int info, int score)
-        {
-            lblSummary.Text = $"Lines: {totalLines} | Critical: {criticals} | Errors: {errors} | Warnings: {warnings} | Success: {success} | Info: {info} | Score: {score}";
-        }
-
-        public class KeywordsData
-        {
-            public List<string> Keywords { get; set; } = new List<string>();
+            // Trim and filter
+            return tokens
+                .Select(t => t.Trim())
+                .Where(t => !string.IsNullOrWhiteSpace(t))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
         }
     }
 }
