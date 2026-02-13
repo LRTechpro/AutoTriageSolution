@@ -5,6 +5,7 @@ using System.Drawing;
 using System.Linq;
 using System.Windows.Forms;
 using AutoTriage.Core;
+using AutoTriage.Core.Decoding;
 
 namespace AutoTriage.Gui
 {
@@ -12,9 +13,9 @@ namespace AutoTriage.Gui
     public class ResultRow
     {
         public int LineNumber { get; set; }
+        public string Timestamp { get; set; } = "";
         public string Code { get; set; } = "";
         public string Severity { get; set; } = "";
-        public string Title { get; set; } = "";
         public string LineText { get; set; } = "";
         public Color RowColor { get; set; } = Color.White;
     }
@@ -38,9 +39,11 @@ namespace AutoTriage.Gui
         private Button btnLoadFile = null!;
         private Button btnAnalyze = null!;
         private Button btnClearAll = null!;
+        private Button btnDecoder = null!;
         private DataGridView dgvResults = null!;
         private Label lblStatus = null!;
         private Label lblLoadedFile = null!;
+        private ContextMenuStrip ctxResultsMenu = null!;
 
         public Form1()
         {
@@ -129,10 +132,20 @@ namespace AutoTriage.Gui
                 Text = "Clear All",
                 Location = new Point(270, 40),
                 Size = new Size(120, 32),
-                Font = new Font("Segoe UI", 9F)
+                Font = new Font("Segoe UI", 9F, FontStyle.Bold)
             };
             btnClearAll.Click += BtnClearAll_Click;
             mainSplitContainer.Panel1.Controls.Add(btnClearAll);
+
+            btnDecoder = new Button
+            {
+                Text = "🔧 Decoder Tools",
+                Location = new Point(400, 40),
+                Size = new Size(140, 32),
+                Font = new Font("Segoe UI", 9F, FontStyle.Bold)
+            };
+            btnDecoder.Click += BtnDecoder_Click;
+            mainSplitContainer.Panel1.Controls.Add(btnDecoder);
 
             // Log input textbox
             txtLogInput = new TextBox
@@ -273,7 +286,7 @@ namespace AutoTriage.Gui
                 ColumnHeadersVisible = true,
                 BackgroundColor = Color.White,
                 GridColor = Color.LightGray,
-                BorderStyle = BorderStyle.Fixed3D,
+                BorderStyle = BorderStyle.FixedSingle,
                 AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.None,
                 AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.AllCells,
                 AllowUserToResizeRows = false,
@@ -310,6 +323,16 @@ namespace AutoTriage.Gui
 
             dgvResults.Columns.Add(new DataGridViewTextBoxColumn 
             { 
+                Name = "colTimestamp", 
+                HeaderText = "Timestamp", 
+                DataPropertyName = "Timestamp",
+                AutoSizeMode = DataGridViewAutoSizeColumnMode.DisplayedCells,
+                MinimumWidth = 150,
+                DefaultCellStyle = new DataGridViewCellStyle { WrapMode = DataGridViewTriState.False }
+            });
+
+            dgvResults.Columns.Add(new DataGridViewTextBoxColumn 
+            { 
                 Name = "colCode", 
                 HeaderText = "Code", 
                 DataPropertyName = "Code",
@@ -328,24 +351,15 @@ namespace AutoTriage.Gui
                 DefaultCellStyle = new DataGridViewCellStyle { WrapMode = DataGridViewTriState.False }
             });
 
-            dgvResults.Columns.Add(new DataGridViewTextBoxColumn 
-            { 
-                Name = "colTitle", 
-                HeaderText = "Title", 
-                DataPropertyName = "Title",
-                AutoSizeMode = DataGridViewAutoSizeColumnMode.DisplayedCells,
-                MinimumWidth = 150,
-                DefaultCellStyle = new DataGridViewCellStyle { WrapMode = DataGridViewTriState.False }
-            });
-
-            dgvResults.Columns.Add(new DataGridViewTextBoxColumn 
+            dgvResults.Columns.Add(new DataGridViewTextBoxColumn
             { 
                 Name = "colLineText", 
                 HeaderText = "Line Text", 
                 DataPropertyName = "LineText",
-                AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill,
+                AutoSizeMode = DataGridViewAutoSizeColumnMode.None,
+                Width = 800,
                 MinimumWidth = 300,
-                DefaultCellStyle = new DataGridViewCellStyle { WrapMode = DataGridViewTriState.True }
+                DefaultCellStyle = new DataGridViewCellStyle { WrapMode = DataGridViewTriState.False }
             });
 
             dgvResults.DataSource = resultsBindingSource;
@@ -358,10 +372,23 @@ namespace AutoTriage.Gui
                     var dgvRow = dgvResults.Rows[e.RowIndex];
                     dgvRow.DefaultCellStyle.BackColor = row.RowColor;
                     dgvRow.DefaultCellStyle.ForeColor = Color.Black;
-                    dgvRow.DefaultCellStyle.SelectionBackColor = Color.FromArgb(200, row.RowColor);
+                    dgvRow.DefaultCellStyle.SelectionBackColor = Color.LightSteelBlue;
                     dgvRow.DefaultCellStyle.SelectionForeColor = Color.Black;
                 }
             };
+
+            // Context menu for right-click payload decoding
+            ctxResultsMenu = new ContextMenuStrip();
+
+            var menuDecodePayload = new ToolStripMenuItem("🔍 Decode Payload (UDS/Automotive)");
+            menuDecodePayload.Click += MenuDecodePayload_Click;
+            ctxResultsMenu.Items.Add(menuDecodePayload);
+
+            var menuRunDecoderTests = new ToolStripMenuItem("🧪 Run Decoder Self-Tests");
+            menuRunDecoderTests.Click += MenuRunDecoderTests_Click;
+            ctxResultsMenu.Items.Add(menuRunDecoderTests);
+
+            dgvResults.ContextMenuStrip = ctxResultsMenu;
 
             mainSplitContainer.Panel2.Controls.Add(dgvResults);
             dgvResults.BringToFront();
@@ -507,6 +534,19 @@ namespace AutoTriage.Gui
             chkIncludeNonFindings.Checked = true;
         }
 
+        private void BtnDecoder_Click(object? sender, EventArgs e)
+        {
+            try
+            {
+                using var decoderForm = new DecoderForm();
+                decoderForm.ShowDialog(this);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Error opening decoder: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
         private void ChkIncludeNonFindings_CheckedChanged(object? sender, EventArgs e)
         {
             if (currentResult != null)
@@ -634,7 +674,7 @@ namespace AutoTriage.Gui
                 foreach (var logLine in currentResult.AllLines)
                 {
                     bool matches = keywords.Any(kw => 
-                        logLine.RawText.IndexOf(kw, StringComparison.OrdinalIgnoreCase) >= 0);
+                        (logLine.RawText ?? "").IndexOf(kw, StringComparison.OrdinalIgnoreCase) >= 0);
 
                     if (matches)
                     {
@@ -654,18 +694,15 @@ namespace AutoTriage.Gui
                         };
 
                         string rawText = logLine.RawText ?? "";
-                        string title = SanitizeForGrid(rawText);
-                        if (title.Length > 80)
-                            title = title.Substring(0, 77) + "...";
-
                         string lineText = SanitizeForGrid(rawText);
+                        string timestamp = ExtractTimestamp(rawText);
 
                         result.Add(new ResultRow
                         {
                             LineNumber = logLine.LineNumber,
+                            Timestamp = timestamp,
                             Code = SanitizeForGrid(code),
                             Severity = SanitizeForGrid(severity.ToString()),
-                            Title = title,
                             LineText = lineText,
                             RowColor = rowColor
                         });
@@ -745,19 +782,15 @@ namespace AutoTriage.Gui
                         _ => Color.White
                     };
 
-                    string rawTitle = finding.Title ?? finding.LineText ?? "";
-                    string title = SanitizeForGrid(rawTitle);
-                    if (title.Length > 80)
-                        title = title.Substring(0, 77) + "...";
-
                     string lineText = SanitizeForGrid(finding.LineText ?? "");
+                    string timestamp = ExtractTimestamp(finding.LineText ?? "");
 
                     result.Add(new ResultRow
                     {
                         LineNumber = finding.LineNumber,
+                        Timestamp = timestamp,
                         Code = SanitizeForGrid(finding.Code ?? "UNKNOWN"),
                         Severity = SanitizeForGrid(finding.Severity.ToString()),
-                        Title = title,
                         LineText = lineText,
                         RowColor = rowColor
                     });
@@ -783,6 +816,163 @@ namespace AutoTriage.Gui
                 .Where(t => !string.IsNullOrWhiteSpace(t))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray();
+        }
+
+        private string ExtractTimestamp(string logLine)
+        {
+            if (string.IsNullOrWhiteSpace(logLine))
+                return "";
+
+            // Common timestamp patterns at the beginning of log lines
+            var patterns = new[]
+            {
+                // ISO 8601: 2024-01-15T14:30:45.123Z or 2024-01-15 14:30:45.123
+                @"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:?\d{2})?",
+
+                // Common log format: 01/15/2024 14:30:45 or 01-15-2024 14:30:45
+                @"^\d{2}[/-]\d{2}[/-]\d{4}\s+\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?",
+
+                // Time only: 14:30:45.123 or 14:30:45
+                @"^\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?",
+
+                // Unix timestamp: [1234567890] or [1234567890.123]
+                @"^\[\d{10,13}(?:\.\d{1,6})?\]",
+
+                // Brackets with date: [2024-01-15 14:30:45]
+                @"^\[\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?\]",
+
+                // Month/Day format: Jan 15 14:30:45 or 01/15 14:30:45
+                @"^(?:[A-Z][a-z]{2}\s+\d{1,2}|\d{2}/\d{2})\s+\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?",
+            };
+
+            foreach (var pattern in patterns)
+            {
+                var match = System.Text.RegularExpressions.Regex.Match(logLine, pattern);
+                if (match.Success)
+                {
+                    // Remove brackets if present
+                    return match.Value.Trim('[', ']', ' ');
+                }
+            }
+
+            return "";
+        }
+
+        private void MenuDecodePayload_Click(object? sender, EventArgs e)
+        {
+            try
+            {
+                if (dgvResults.SelectedRows.Count == 0)
+                {
+                    MessageBox.Show("Please select a row to decode.", "No Selection", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+
+                var selectedRow = dgvResults.SelectedRows[0];
+                var rowIndex = selectedRow.Index;
+
+                if (rowIndex >= 0 && rowIndex < displayedRows.Count)
+                {
+                    var resultRow = displayedRows[rowIndex];
+                    var lineText = resultRow.LineText;
+
+                    if (string.IsNullOrWhiteSpace(lineText))
+                    {
+                        MessageBox.Show("Selected row has no line text to decode.", "Empty Line", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
+
+                    // Decode the payload
+                    var decoded = DecoderIntegration.TryDecodeFromLine(lineText);
+
+                    // Show result in a dialog
+                    var resultForm = new Form
+                    {
+                        Text = $"Decoded Payload - Line {resultRow.LineNumber}",
+                        Size = new Size(800, 600),
+                        StartPosition = FormStartPosition.CenterParent,
+                        ShowIcon = false,
+                        MinimizeBox = false,
+                        MaximizeBox = true
+                    };
+
+                    var txtResult = new TextBox
+                    {
+                        Multiline = true,
+                        Dock = DockStyle.Fill,
+                        ScrollBars = ScrollBars.Both,
+                        Font = new Font("Consolas", 9F),
+                        ReadOnly = true,
+                        BackColor = Color.White,
+                        Text = decoded.ToFormattedString()
+                    };
+
+                    var btnClose = new Button
+                    {
+                        Text = "Close",
+                        Dock = DockStyle.Bottom,
+                        Height = 40,
+                        Font = new Font("Segoe UI", 9F, FontStyle.Bold)
+                    };
+                    btnClose.Click += (s, ev) => resultForm.Close();
+
+                    resultForm.Controls.Add(txtResult);
+                    resultForm.Controls.Add(btnClose);
+
+                    resultForm.ShowDialog(this);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Error decoding payload: {ex.Message}", "Decode Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void MenuRunDecoderTests_Click(object? sender, EventArgs e)
+        {
+            try
+            {
+                var testResults = DecoderIntegration.RunDecoderSelfTests();
+
+                var resultForm = new Form
+                {
+                    Text = "Decoder Self-Test Results",
+                    Size = new Size(700, 500),
+                    StartPosition = FormStartPosition.CenterParent,
+                    ShowIcon = false,
+                    MinimizeBox = false,
+                    MaximizeBox = true
+                };
+
+                var txtResult = new TextBox
+                {
+                    Multiline = true,
+                    Dock = DockStyle.Fill,
+                    ScrollBars = ScrollBars.Both,
+                    Font = new Font("Consolas", 9F),
+                    ReadOnly = true,
+                    BackColor = Color.White,
+                    Text = string.Join(Environment.NewLine + Environment.NewLine, testResults)
+                };
+
+                var btnClose = new Button
+                {
+                    Text = "Close",
+                    Dock = DockStyle.Bottom,
+                    Height = 40,
+                    Font = new Font("Segoe UI", 9F, FontStyle.Bold)
+                };
+                btnClose.Click += (s, ev) => resultForm.Close();
+
+                resultForm.Controls.Add(txtResult);
+                resultForm.Controls.Add(btnClose);
+
+                resultForm.ShowDialog(this);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Error running tests: {ex.Message}", "Test Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
         }
     }
 }
