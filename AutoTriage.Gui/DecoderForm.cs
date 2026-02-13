@@ -16,9 +16,17 @@ namespace AutoTriage.Gui
         private Button btnClear = null!;
         private Button btnSwap = null!;
         private Button btnAutoDetect = null!;
+        private Button btnHelp = null!;
+        private Button btnExamples = null!;
+        private Button btnSample1 = null!;
+        private Button btnSample2 = null!;
+        private Button btnSample3 = null!;
         private Label lblInputLabel = null!;
         private Label lblOutputLabel = null!;
         private Label lblDetectedType = null!;
+        private Label lblHint = null!;
+        private Panel pnlSamples = null!;
+        private ToolTip toolTip = null!;
 
         public DecoderForm()
         {
@@ -27,13 +35,14 @@ namespace AutoTriage.Gui
 
         private void InitializeComponent()
         {
-            this.Text = "Decoder Tools";
-            this.Size = new Size(900, 700);
-            this.MinimumSize = new Size(700, 500);
+            this.Text = "🔧 Automotive Decoder Tools";
+            this.Size = new Size(1000, 750);
+            this.MinimumSize = new Size(850, 600);
             this.StartPosition = FormStartPosition.CenterParent;
             this.FormBorderStyle = FormBorderStyle.Sizable;
             this.MaximizeBox = true;
             this.MinimizeBox = true;
+            this.BackColor = Color.WhiteSmoke;
 
             // Conversion type label
             var lblConversionType = new Label
@@ -101,16 +110,46 @@ namespace AutoTriage.Gui
             btnSwap.Click += BtnSwap_Click;
             this.Controls.Add(btnSwap);
 
+            // Initialize ToolTip component
+            toolTip = new ToolTip();
+
             // Clear button
             btnClear = new Button
             {
-                Text = "Clear",
+                Text = "🗑 Clear",
                 Location = new Point(750, 10),
-                Size = new Size(80, 30),
+                Size = new Size(85, 30),
                 Font = new Font("Segoe UI", 9F)
             };
             btnClear.Click += BtnClear_Click;
+            toolTip.SetToolTip(btnClear, "Clear both input and output fields");
             this.Controls.Add(btnClear);
+
+            // Examples button
+            btnExamples = new Button
+            {
+                Text = "📚 Examples",
+                Location = new Point(845, 10),
+                Size = new Size(105, 30),
+                Font = new Font("Segoe UI", 9F, FontStyle.Bold),
+                BackColor = Color.LightSkyBlue
+            };
+            btnExamples.Click += BtnExamples_Click;
+            toolTip.SetToolTip(btnExamples, "Show usage examples");
+            this.Controls.Add(btnExamples);
+
+            // Help button  
+            btnHelp = new Button
+            {
+                Text = "❓ Help",
+                Location = new Point(960, 10),
+                Size = new Size(80, 30),
+                Font = new Font("Segoe UI", 9F, FontStyle.Bold),
+                BackColor = Color.LightCoral
+            };
+            btnHelp.Click += BtnHelp_Click;
+            toolTip.SetToolTip(btnHelp, "Show detailed help and instructions");
+            this.Controls.Add(btnHelp);
 
             // Detected type label
             lblDetectedType = new Label
@@ -123,11 +162,75 @@ namespace AutoTriage.Gui
             };
             this.Controls.Add(lblDetectedType);
 
+            // Quick samples panel
+            pnlSamples = new Panel
+            {
+                Location = new Point(15, 45),
+                Size = new Size(380, 35),
+                BackColor = Color.Lavender,
+                BorderStyle = BorderStyle.FixedSingle
+            };
+            this.Controls.Add(pnlSamples);
+
+            var lblSamples = new Label
+            {
+                Text = "Quick Samples:",
+                Location = new Point(5, 9),
+                AutoSize = true,
+                Font = new Font("Segoe UI", 8F, FontStyle.Bold)
+            };
+            pnlSamples.Controls.Add(lblSamples);
+
+            btnSample1 = new Button
+            {
+                Text = "UDS",
+                Location = new Point(100, 5),
+                Size = new Size(55, 25),
+                Font = new Font("Segoe UI", 8F)
+            };
+            btnSample1.Click += (s, e) => LoadSample1();
+            toolTip.SetToolTip(btnSample1, "Load UDS diagnostic code example");
+            pnlSamples.Controls.Add(btnSample1);
+
+            btnSample2 = new Button
+            {
+                Text = "ISO-TP",
+                Location = new Point(165, 5),
+                Size = new Size(65, 25),
+                Font = new Font("Segoe UI", 8F)
+            };
+            btnSample2.Click += (s, e) => LoadSample2();
+            toolTip.SetToolTip(btnSample2, "Load ISO-TP frame example");
+            pnlSamples.Controls.Add(btnSample2);
+
+            btnSample3 = new Button
+            {
+                Text = "CAN Frame",
+                Location = new Point(240, 5),
+                Size = new Size(85, 25),
+                Font = new Font("Segoe UI", 8F)
+            };
+            btnSample3.Click += (s, e) => LoadSample3();
+            toolTip.SetToolTip(btnSample3, "Load CAN frame example");
+            pnlSamples.Controls.Add(btnSample3);
+
+            // Hint label
+            lblHint = new Label
+            {
+                Text = "💡 Tip: Click 'Examples' to see usage scenarios, or try 'Auto Detect' to identify your input automatically!",
+                Location = new Point(15, 85),
+                Size = new Size(950, 20),
+                Font = new Font("Segoe UI", 8F, FontStyle.Italic),
+                ForeColor = Color.DarkSlateBlue,
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right
+            };
+            this.Controls.Add(lblHint);
+
             // Input label
             lblInputLabel = new Label
             {
                 Text = "Input (Hex):",
-                Location = new Point(15, 70),
+                Location = new Point(15, 110),
                 AutoSize = true,
                 Font = new Font("Segoe UI", 9F, FontStyle.Bold)
             };
@@ -136,20 +239,22 @@ namespace AutoTriage.Gui
             // Input textbox
             txtInput = new TextBox
             {
-                Location = new Point(15, 95),
-                Size = new Size(850, 250),
+                Location = new Point(15, 135),
+                Size = new Size(950, 240),
                 Multiline = true,
                 ScrollBars = ScrollBars.Both,
-                Font = new Font("Consolas", 9F),
-                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right
+                Font = new Font("Consolas", 10F),
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
+                BackColor = Color.White
             };
+            txtInput.TextChanged += TxtInput_TextChanged;
             this.Controls.Add(txtInput);
 
             // Output label
             lblOutputLabel = new Label
             {
                 Text = "Output (ASCII):",
-                Location = new Point(15, 360),
+                Location = new Point(15, 390),
                 AutoSize = true,
                 Font = new Font("Segoe UI", 9F, FontStyle.Bold)
             };
@@ -158,13 +263,13 @@ namespace AutoTriage.Gui
             // Output textbox
             txtOutput = new TextBox
             {
-                Location = new Point(15, 385),
-                Size = new Size(850, 250),
+                Location = new Point(15, 415),
+                Size = new Size(950, 280),
                 Multiline = true,
                 ScrollBars = ScrollBars.Both,
-                Font = new Font("Consolas", 9F),
+                Font = new Font("Consolas", 10F),
                 ReadOnly = true,
-                BackColor = Color.WhiteSmoke,
+                BackColor = Color.Honeydew,
                 Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right
             };
             this.Controls.Add(txtOutput);
@@ -955,6 +1060,275 @@ namespace AutoTriage.Gui
                 sb.Append(hex.Substring(i, Math.Min(2, hex.Length - i)));
             }
             return sb.ToString().ToUpper();
+        }
+
+        // ==================================================================
+        // NEW: Enhanced Features for Better Usability
+        // ==================================================================
+
+        private void TxtInput_TextChanged(object? sender, EventArgs e)
+        {
+            // Update hint based on input content
+            string input = txtInput.Text.Trim();
+
+            if (string.IsNullOrWhiteSpace(input))
+            {
+                lblHint.Text = "💡 Tip: Click 'Examples' to see usage scenarios, or try 'Auto Detect' to identify your input automatically!";
+                lblHint.ForeColor = Color.DarkSlateBlue;
+            }
+            else if (input.Length < 4)
+            {
+                lblHint.Text = "⌨️ Keep typing... Need at least 2 hex bytes (4 characters) for conversion.";
+                lblHint.ForeColor = Color.DarkOrange;
+            }
+            else
+            {
+                lblHint.Text = "✅ Input looks good! Click 'Auto Detect' or select a conversion type and hit 'Convert'.";
+                lblHint.ForeColor = Color.DarkGreen;
+            }
+        }
+
+        private void BtnHelp_Click(object? sender, EventArgs e)
+        {
+            var helpText = new StringBuilder();
+            helpText.AppendLine("╔══════════════════════════════════════════════════════════════════════╗");
+            helpText.AppendLine("║               🔧 AUTOMOTIVE DECODER TOOLS - HELP GUIDE               ║");
+            helpText.AppendLine("╚══════════════════════════════════════════════════════════════════════╝");
+            helpText.AppendLine();
+            helpText.AppendLine("📖 OVERVIEW");
+            helpText.AppendLine("═══════════════════════════════════════════════════════════════════════");
+            helpText.AppendLine("This tool decodes automotive diagnostic data, including:");
+            helpText.AppendLine("  • UDS (Unified Diagnostic Services) codes per ISO 14229");
+            helpText.AppendLine("  • ISO-TP (ISO 15765-2) transport protocol frames");
+            helpText.AppendLine("  • Ford CAN frame format with diagnostic identifiers");
+            helpText.AppendLine("  • Generic hex/ASCII/binary/Base64 conversions");
+            helpText.AppendLine();
+            helpText.AppendLine("🚀 QUICK START");
+            helpText.AppendLine("═══════════════════════════════════════════════════════════════════════");
+            helpText.AppendLine("1. Paste your diagnostic data into the 'Input' field");
+            helpText.AppendLine("2. Click 'Auto Detect' to automatically identify the format");
+            helpText.AppendLine("3. View the decoded output with detailed explanations");
+            helpText.AppendLine();
+            helpText.AppendLine("   OR manually select a conversion type from the dropdown menu.");
+            helpText.AppendLine();
+            helpText.AppendLine("🎯 CONVERSION TYPES");
+            helpText.AppendLine("═══════════════════════════════════════════════════════════════════════");
+            helpText.AppendLine("• Hex ↔ ASCII:  Convert between hexadecimal and ASCII text");
+            helpText.AppendLine("• Binary ↔ Hex:  Convert between binary (0s/1s) and hexadecimal");
+            helpText.AppendLine("• Base64 ↔ Text: Encode/decode Base64 strings");
+            helpText.AppendLine("• UDS Decoder:  Decode UDS diagnostic codes with full explanations");
+            helpText.AppendLine();
+            helpText.AppendLine("📊 SUPPORTED INPUT FORMATS");
+            helpText.AppendLine("═══════════════════════════════════════════════════════════════════════");
+            helpText.AppendLine("Hexadecimal:");
+            helpText.AppendLine("  • Space-separated: 7F 22 31");
+            helpText.AppendLine("  • Hyphen-separated: 7F-22-31");
+            helpText.AppendLine("  • Comma-separated: 7F,22,31");
+            helpText.AppendLine("  • Colon-separated: 7F:22:31");
+            helpText.AppendLine("  • Continuous: 7F2231");
+            helpText.AppendLine("  • With 0x prefix: 0x7F 0x22 0x31");
+            helpText.AppendLine("  • Decimal CSV: 127,34,49");
+            helpText.AppendLine();
+            helpText.AppendLine("Binary:");
+            helpText.AppendLine("  • Space-separated: 01111111 00100010 00110001");
+            helpText.AppendLine("  • Continuous: 011111110010001000110001");
+            helpText.AppendLine();
+            helpText.AppendLine("🔍 UDS DECODER SPECIFICS");
+            helpText.AppendLine("═══════════════════════════════════════════════════════════════════════");
+            helpText.AppendLine("The UDS decoder automatically identifies:");
+            helpText.AppendLine("  ✅ Request messages (from diagnostic tester to ECU)");
+            helpText.AppendLine("  ✅ Positive responses (successful operations)");
+            helpText.AppendLine("  ❌ Negative responses (rejected requests with error codes)");
+            helpText.AppendLine();
+            helpText.AppendLine("For each UDS code, you'll see:");
+            helpText.AppendLine("  • Service name and ID");
+            helpText.AppendLine("  • Service category and purpose");
+            helpText.AppendLine("  • Sub-function details (if applicable)");
+            helpText.AppendLine("  • Contextual interpretation");
+            helpText.AppendLine("  • Negative Response Code (NRC) explanations");
+            helpText.AppendLine("  • Recommended actions for errors");
+            helpText.AppendLine();
+            helpText.AppendLine("🛠️ BUTTON FUNCTIONS");
+            helpText.AppendLine("═══════════════════════════════════════════════════════════════════════");
+            helpText.AppendLine("🟢 Auto Detect:  Automatically identify input format and convert");
+            helpText.AppendLine("🔵 Convert:      Convert using selected conversion type");
+            helpText.AppendLine("🔄 Swap:         Swap input/output and reverse conversion direction");
+            helpText.AppendLine("🗑️  Clear:        Clear both input and output fields");
+            helpText.AppendLine("📚 Examples:     Show practical usage examples");
+            helpText.AppendLine("❓ Help:         Show this help guide (you're here!)");
+            helpText.AppendLine();
+            helpText.AppendLine("🧪 QUICK SAMPLES");
+            helpText.AppendLine("═══════════════════════════════════════════════════════════════════════");
+            helpText.AppendLine("Use the Quick Samples buttons to instantly load example data:");
+            helpText.AppendLine("  • UDS:        Load a UDS negative response example");
+            helpText.AppendLine("  • ISO-TP:     Load an ISO-TP single frame example");
+            helpText.AppendLine("  • CAN Frame:  Load a Ford CAN diagnostic frame example");
+            helpText.AppendLine();
+            helpText.AppendLine("💡 PRO TIPS");
+            helpText.AppendLine("═══════════════════════════════════════════════════════════════════════");
+            helpText.AppendLine("• Use 'Auto Detect' when you're unsure of the input format");
+            helpText.AppendLine("• UDS decoding works with ISO-TP wrapped or raw UDS codes");
+            helpText.AppendLine("• Ford CAN frames (4-byte header) are automatically detected");
+            helpText.AppendLine("• Negative Response Code 0x78 means 'wait for response' (not an error!)");
+            helpText.AppendLine("• The tool never guesses - only returns proven facts from the data");
+            helpText.AppendLine();
+            helpText.AppendLine("📞 NEED MORE HELP?");
+            helpText.AppendLine("═══════════════════════════════════════════════════════════════════════");
+            helpText.AppendLine("• Check the 'Examples' for real-world usage scenarios");
+            helpText.AppendLine("• Review the documentation in the AutoTriage repository");
+            helpText.AppendLine("• Consult ISO 14229 (UDS) and ISO 15765-2 (ISO-TP) specifications");
+            helpText.AppendLine();
+            helpText.AppendLine("Press OK to close this help guide.");
+
+            MessageBox.Show(helpText.ToString(), "Automotive Decoder Tools - Help", 
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+
+        private void BtnExamples_Click(object? sender, EventArgs e)
+        {
+            var examplesText = new StringBuilder();
+            examplesText.AppendLine("╔══════════════════════════════════════════════════════════════════════╗");
+            examplesText.AppendLine("║             📚 AUTOMOTIVE DECODER TOOLS - USAGE EXAMPLES             ║");
+            examplesText.AppendLine("╚══════════════════════════════════════════════════════════════════════╝");
+            examplesText.AppendLine();
+
+            examplesText.AppendLine("EXAMPLE 1: UDS Negative Response");
+            examplesText.AppendLine("══════════════════════════════════════════════════════════════════════");
+            examplesText.AppendLine("Input:  7F 22 31");
+            examplesText.AppendLine("Meaning:");
+            examplesText.AppendLine("  • 0x7F = Negative Response indicator");
+            examplesText.AppendLine("  • 0x22 = ReadDataByIdentifier (the rejected service)");
+            examplesText.AppendLine("  • 0x31 = RequestOutOfRange (NRC - the reason for rejection)");
+            examplesText.AppendLine();
+            examplesText.AppendLine("Interpretation: The ECU rejected a ReadDataByIdentifier request");
+            examplesText.AppendLine("because the requested data identifier was out of range.");
+            examplesText.AppendLine();
+
+            examplesText.AppendLine("EXAMPLE 2: UDS Request - Read VIN");
+            examplesText.AppendLine("══════════════════════════════════════════════════════════════════════");
+            examplesText.AppendLine("Input:  22 F1 90");
+            examplesText.AppendLine("Meaning:");
+            examplesText.AppendLine("  • 0x22 = ReadDataByIdentifier service");
+            examplesText.AppendLine("  • 0xF190 = Data Identifier (DID) for VIN");
+            examplesText.AppendLine();
+            examplesText.AppendLine("Interpretation: Tester is requesting the Vehicle Identification Number");
+            examplesText.AppendLine("from the ECU.");
+            examplesText.AppendLine();
+
+            examplesText.AppendLine("EXAMPLE 3: UDS Positive Response");
+            examplesText.AppendLine("══════════════════════════════════════════════════════════════════════");
+            examplesText.AppendLine("Input:  50 03");
+            examplesText.AppendLine("Meaning:");
+            examplesText.AppendLine("  • 0x50 = Positive response to DiagnosticSessionControl (0x10 + 0x40)");
+            examplesText.AppendLine("  • 0x03 = Extended Diagnostic Session");
+            examplesText.AppendLine();
+            examplesText.AppendLine("Interpretation: ECU confirmed it switched to Extended Diagnostic Session.");
+            examplesText.AppendLine();
+
+            examplesText.AppendLine("EXAMPLE 4: ISO-TP Single Frame with UDS");
+            examplesText.AppendLine("══════════════════════════════════════════════════════════════════════");
+            examplesText.AppendLine("Input:  03 7F 22 31");
+            examplesText.AppendLine("Meaning:");
+            examplesText.AppendLine("  • 0x03 = ISO-TP Single Frame, 3 bytes of payload");
+            examplesText.AppendLine("  • 7F 22 31 = UDS Negative Response (as in Example 1)");
+            examplesText.AppendLine();
+            examplesText.AppendLine("Interpretation: ISO-TP transports the UDS negative response.");
+            examplesText.AppendLine("The tool will unwrap the ISO-TP layer and decode the UDS message.");
+            examplesText.AppendLine();
+
+            examplesText.AppendLine("EXAMPLE 5: Ford CAN Frame Format");
+            examplesText.AppendLine("══════════════════════════════════════════════════════════════════════");
+            examplesText.AppendLine("Input:  00 00 07 D8 7F 22 31");
+            examplesText.AppendLine("Meaning:");
+            examplesText.AppendLine("  • 00 00 07 D8 = CAN frame header (CAN ID 0x07D8 = Response from ECU)");
+            examplesText.AppendLine("  • 7F 22 31 = UDS Negative Response");
+            examplesText.AppendLine();
+            examplesText.AppendLine("Interpretation: A diagnostic response from Ford ECU via CAN.");
+            examplesText.AppendLine("The tool strips the CAN header and decodes the UDS payload.");
+            examplesText.AppendLine();
+
+            examplesText.AppendLine("EXAMPLE 6: Security Access - Request Seed");
+            examplesText.AppendLine("══════════════════════════════════════════════════════════════════════");
+            examplesText.AppendLine("Input:  27 01");
+            examplesText.AppendLine("Meaning:");
+            examplesText.AppendLine("  • 0x27 = SecurityAccess service");
+            examplesText.AppendLine("  • 0x01 = Request Seed (Level 1)");
+            examplesText.AppendLine();
+            examplesText.AppendLine("Interpretation: Tester is requesting a security seed from the ECU");
+            examplesText.AppendLine("to unlock Level 1 security access (Step 1 of 2).");
+            examplesText.AppendLine();
+
+            examplesText.AppendLine("EXAMPLE 7: Diagnostic Session Control");
+            examplesText.AppendLine("══════════════════════════════════════════════════════════════════════");
+            examplesText.AppendLine("Input:  10 03");
+            examplesText.AppendLine("Meaning:");
+            examplesText.AppendLine("  • 0x10 = DiagnosticSessionControl service");
+            examplesText.AppendLine("  • 0x03 = Extended Diagnostic Session");
+            examplesText.AppendLine();
+            examplesText.AppendLine("Interpretation: Tester is requesting the ECU to switch to Extended");
+            examplesText.AppendLine("Diagnostic Session, which enables access to more services.");
+            examplesText.AppendLine();
+
+            examplesText.AppendLine("EXAMPLE 8: Hex to ASCII Conversion");
+            examplesText.AppendLine("══════════════════════════════════════════════════════════════════════");
+            examplesText.AppendLine("Input:  48 65 6C 6C 6F");
+            examplesText.AppendLine("Output: Hello");
+            examplesText.AppendLine();
+            examplesText.AppendLine("Use Case: Converting hex-encoded text from log files.");
+            examplesText.AppendLine();
+
+            examplesText.AppendLine("EXAMPLE 9: Decimal CSV Input");
+            examplesText.AppendLine("══════════════════════════════════════════════════════════════════════");
+            examplesText.AppendLine("Input:  2,203,006,208");
+            examplesText.AppendLine("Meaning:");
+            examplesText.AppendLine("  • Converts to hex: 02 CB 06 D0");
+            examplesText.AppendLine("  • 0x02 = ISO-TP Single Frame, 2 bytes payload");
+            examplesText.AppendLine("  • CB 06 D0 = Payload data");
+            examplesText.AppendLine();
+            examplesText.AppendLine("Use Case: Parsing decimal byte arrays from some logging tools.");
+            examplesText.AppendLine();
+
+            examplesText.AppendLine("EXAMPLE 10: Binary to Hex");
+            examplesText.AppendLine("══════════════════════════════════════════════════════════════════════");
+            examplesText.AppendLine("Input:  01111111 00100010 00110001");
+            examplesText.AppendLine("Output: 7F 22 31");
+            examplesText.AppendLine();
+            examplesText.AppendLine("Use Case: Converting binary representations to hexadecimal.");
+            examplesText.AppendLine();
+
+            examplesText.AppendLine("════════════════════════════════════════════════════════════════════");
+            examplesText.AppendLine("💡 TIP: Use the 'Quick Samples' buttons to instantly load examples!");
+            examplesText.AppendLine("════════════════════════════════════════════════════════════════════");
+
+            MessageBox.Show(examplesText.ToString(), "Automotive Decoder Tools - Examples", 
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+
+        private void LoadSample1()
+        {
+            // UDS Negative Response example
+            txtInput.Text = "7F 22 31";
+            cboConversionType.SelectedItem = "UDS Code Decoder";
+            lblHint.Text = "📋 Sample loaded: UDS Negative Response - Click 'Convert' to decode!";
+            lblHint.ForeColor = Color.Blue;
+        }
+
+        private void LoadSample2()
+        {
+            // ISO-TP Single Frame with UDS example
+            txtInput.Text = "03 22 F1 90";
+            cboConversionType.SelectedItem = "UDS Code Decoder";
+            lblHint.Text = "📋 Sample loaded: ISO-TP Single Frame with UDS ReadDataByIdentifier - Click 'Convert' to decode!";
+            lblHint.ForeColor = Color.Blue;
+        }
+
+        private void LoadSample3()
+        {
+            // Ford CAN Frame example
+            txtInput.Text = "00 00 07 D8 7F 22 31";
+            cboConversionType.SelectedItem = "UDS Code Decoder";
+            lblHint.Text = "📋 Sample loaded: Ford CAN Frame with Negative Response - Click 'Convert' to decode!";
+            lblHint.ForeColor = Color.Blue;
         }
     }
 }
