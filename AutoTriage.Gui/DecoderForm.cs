@@ -1177,11 +1177,8 @@ namespace AutoTriage.Gui
             helpText.AppendLine("• Check the 'Examples' for real-world usage scenarios");
             helpText.AppendLine("• Review the documentation in the AutoTriage repository");
             helpText.AppendLine("• Consult ISO 14229 (UDS) and ISO 15765-2 (ISO-TP) specifications");
-            helpText.AppendLine();
-            helpText.AppendLine("Press OK to close this help guide.");
 
-            MessageBox.Show(helpText.ToString(), "Automotive Decoder Tools - Help", 
-                MessageBoxButtons.OK, MessageBoxIcon.Information);
+            ShowScrollableDialog("Automotive Decoder Tools - Help", helpText.ToString());
         }
 
         private void BtnExamples_Click(object? sender, EventArgs e)
@@ -1300,8 +1297,7 @@ namespace AutoTriage.Gui
             examplesText.AppendLine("💡 TIP: Use the 'Quick Samples' buttons to instantly load examples!");
             examplesText.AppendLine("════════════════════════════════════════════════════════════════════");
 
-            MessageBox.Show(examplesText.ToString(), "Automotive Decoder Tools - Examples", 
-                MessageBoxButtons.OK, MessageBoxIcon.Information);
+            ShowScrollableDialog("Automotive Decoder Tools - Examples", examplesText.ToString());
         }
 
         private void LoadSample1()
@@ -1329,6 +1325,62 @@ namespace AutoTriage.Gui
             cboConversionType.SelectedItem = "UDS Code Decoder";
             lblHint.Text = "📋 Sample loaded: Ford CAN Frame with Negative Response - Click 'Convert' to decode!";
             lblHint.ForeColor = Color.Blue;
+        }
+
+        /// <summary>
+        /// Shows a scrollable dialog with the specified title and content
+        /// Used for Help and Examples dialogs that may be too long for the screen
+        /// </summary>
+        private void ShowScrollableDialog(string title, string content)
+        {
+            // Create custom form for scrollable content
+            var dialogForm = new Form
+            {
+                Text = title,
+                Size = new Size(900, 650),
+                StartPosition = FormStartPosition.CenterParent,
+                FormBorderStyle = FormBorderStyle.Sizable,
+                MaximizeBox = true,
+                MinimizeBox = true,
+                ShowIcon = false,
+                MinimumSize = new Size(600, 400)
+            };
+
+            // Create scrollable text box
+            var textBox = new TextBox
+            {
+                Multiline = true,
+                ReadOnly = true,
+                ScrollBars = ScrollBars.Both,
+                Dock = DockStyle.Fill,
+                Font = new Font("Consolas", 9F),
+                BackColor = Color.White,
+                WordWrap = false,
+                Text = content
+            };
+            dialogForm.Controls.Add(textBox);
+
+            // Create OK button panel
+            var buttonPanel = new Panel
+            {
+                Dock = DockStyle.Bottom,
+                Height = 50,
+                BackColor = Color.WhiteSmoke
+            };
+
+            var okButton = new Button
+            {
+                Text = "OK",
+                Size = new Size(100, 30),
+                Location = new Point(400, 10),
+                Font = new Font("Segoe UI", 9F, FontStyle.Bold),
+                DialogResult = DialogResult.OK
+            };
+            buttonPanel.Controls.Add(okButton);
+            dialogForm.Controls.Add(buttonPanel);
+
+            dialogForm.AcceptButton = okButton;
+            dialogForm.ShowDialog(this);
         }
     }
 }

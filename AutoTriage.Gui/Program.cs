@@ -27,16 +27,27 @@ namespace AutoTriage.Gui
         [STAThread]
         static void Main()
         {
-            // Initializes application-wide configuration such as:
-            // - Default fonts
-            // - High DPI settings
-            // - Visual styles
-            // This call is required for modern WinForms behavior.
-            ApplicationConfiguration.Initialize();
+            try
+            {
+                // Configure High DPI mode for modern displays (Per-Monitor V2)
+                Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
 
-            // Starts the application's message loop and displays Form1
-            // as the main user interface window.
-            Application.Run(new Form1());
+                // Enable visual styles for modern Windows appearance
+                Application.EnableVisualStyles();
+
+                // Use compatible text rendering
+                Application.SetCompatibleTextRenderingDefault(false);
+
+                // Starts the application's message loop and displays Form1
+                Application.Run(new Form1());
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Fatal error during application startup:\n\n{ex.Message}\n\nStack trace:\n{ex.StackTrace}", 
+                    "Application Error", 
+                    MessageBoxButtons.OK, 
+                    MessageBoxIcon.Error);
+            }
         }
     }
 }

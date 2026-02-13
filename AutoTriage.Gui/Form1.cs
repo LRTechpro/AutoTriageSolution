@@ -20,18 +20,20 @@ namespace AutoTriage.Gui
         public Color RowColor { get; set; } = Color.White;
     }
 
-    public partial class Form1 : Form
+    public class Form1 : Form
     {
         private LogAnalyzer analyzer;
         private AnalysisResult? currentResult;
         private BindingList<ResultRow> displayedRows;
         private BindingSource resultsBindingSource = new BindingSource();
 
+        // NRC filter checkbox (for filtering Negative Response Codes)
+        private CheckBox chkNRC = null!;
+
         // UI Controls
         private SplitContainer mainSplitContainer = null!;
         private TextBox txtLogInput = null!;
         private TextBox txtKeywordFilter = null!;
-        private CheckBox chkIncludeNonFindings = null!;
         private CheckBox chkCritical = null!;
         private CheckBox chkError = null!;
         private CheckBox chkWarning = null!;
@@ -47,10 +49,21 @@ namespace AutoTriage.Gui
 
         public Form1()
         {
-            analyzer = new LogAnalyzer();
-            displayedRows = new BindingList<ResultRow>();
-            resultsBindingSource.DataSource = displayedRows;
-            InitializeCustomUI();
+            try
+            {
+                analyzer = new LogAnalyzer();
+                displayedRows = new BindingList<ResultRow>();
+                resultsBindingSource.DataSource = displayedRows;
+                InitializeCustomUI();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Error initializing Form1:\n\n{ex.Message}\n\nStack:\n{ex.StackTrace}", 
+                    "Initialization Error", 
+                    MessageBoxButtons.OK, 
+                    MessageBoxIcon.Error);
+                throw;
+            }
         }
 
         private void InitializeCustomUI()
@@ -147,6 +160,61 @@ namespace AutoTriage.Gui
             btnDecoder.Click += BtnDecoder_Click;
             mainSplitContainer.Panel1.Controls.Add(btnDecoder);
 
+            // Raw log search textbox (Wireshark-style: find one match at a time)
+            var txtRawLogSearch = new TextBox
+            {
+                PlaceholderText = "Search raw log...",
+                Location = new Point(550, 40),
+                Size = new Size(200, 32),
+                Font = new Font("Segoe UI", 9F)
+            };
+            txtRawLogSearch.KeyDown += (s, e) =>
+            {
+                // Press Enter to find next (like Wireshark)
+                if (e.KeyCode == Keys.Enter)
+                {
+                    e.SuppressKeyPress = true;
+                    if (!string.IsNullOrWhiteSpace(txtRawLogSearch.Text))
+                    {
+                        FindNextInLog(txtRawLogSearch.Text);
+                    }
+                }
+            };
+            mainSplitContainer.Panel1.Controls.Add(txtRawLogSearch);
+
+            // Add navigation buttons for raw log search
+            var btnFindNext = new Button
+            {
+                Text = "⬇ Next",
+                Location = new Point(760, 40),
+                Size = new Size(70, 32),
+                Font = new Font("Segoe UI", 8F)
+            };
+            btnFindNext.Click += (s, e) =>
+            {
+                if (!string.IsNullOrWhiteSpace(txtRawLogSearch.Text))
+                {
+                    FindNextInLog(txtRawLogSearch.Text);
+                }
+            };
+            mainSplitContainer.Panel1.Controls.Add(btnFindNext);
+
+            var btnFindPrev = new Button
+            {
+                Text = "⬆ Prev",
+                Location = new Point(835, 40),
+                Size = new Size(70, 32),
+                Font = new Font("Segoe UI", 8F)
+            };
+            btnFindPrev.Click += (s, e) =>
+            {
+                if (!string.IsNullOrWhiteSpace(txtRawLogSearch.Text))
+                {
+                    FindPrevInLog(txtRawLogSearch.Text);
+                }
+            };
+            mainSplitContainer.Panel1.Controls.Add(btnFindPrev);
+
             // Log input textbox
             txtLogInput = new TextBox
             {
@@ -154,6 +222,10 @@ namespace AutoTriage.Gui
                 ScrollBars = ScrollBars.Both,
                 WordWrap = false,
                 Font = new Font("Consolas", 9F),
+                HideSelection = false,  // Keep selection visible even when not focused
+                MaxLength = 0,  // 0 = no limit (allows very large logs)
+                // ReadOnly removed - users need to be able to paste logs here
+                // Will be set to ReadOnly AFTER analysis to prevent accidental edits
                 Location = new Point(10, 80),
                 Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right,
                 Size = new Size(mainSplitContainer.Panel1.Width - 20, mainSplitContainer.Panel1.Height - 90)
@@ -180,7 +252,7 @@ namespace AutoTriage.Gui
             var filterPanel = new Panel
             {
                 Dock = DockStyle.Top,
-                Height = 90,  // Reduced to 90 for better space
+                Height = 90,  // Reduced from 120 since NRC is now a single checkbox
                 Padding = new Padding(10),
                 BackColor = Color.WhiteSmoke
             };
@@ -204,17 +276,6 @@ namespace AutoTriage.Gui
             txtKeywordFilter.TextChanged += TxtKeywordFilter_TextChanged;
             txtKeywordFilter.KeyDown += TxtKeywordFilter_KeyDown;
             filterPanel.Controls.Add(txtKeywordFilter);
-
-            chkIncludeNonFindings = new CheckBox
-            {
-                Text = "Include non-finding matches",
-                Location = new Point(370, 35),
-                AutoSize = true,
-                Checked = true,
-                Font = new Font("Segoe UI", 9F)
-            };
-            chkIncludeNonFindings.CheckedChanged += ChkIncludeNonFindings_CheckedChanged;
-            filterPanel.Controls.Add(chkIncludeNonFindings);
 
             // Severity filters
             var lblSeverity = new Label
@@ -269,6 +330,18 @@ namespace AutoTriage.Gui
             };
             chkSuccess.CheckedChanged += SeverityFilter_CheckedChanged;
             filterPanel.Controls.Add(chkSuccess);
+
+            // NRC filter (Negative Response Codes)
+            chkNRC = new CheckBox
+            {
+                Text = "NRC",
+                Location = new Point(420, 60),
+                AutoSize = true,
+                Checked = true,  // Default: show NRC codes
+                Font = new Font("Segoe UI", 9F)
+            };
+            chkNRC.CheckedChanged += NrcFilter_CheckedChanged;
+            filterPanel.Controls.Add(chkNRC);
 
             mainSplitContainer.Panel2.Controls.Add(filterPanel);
 
@@ -396,6 +469,11 @@ namespace AutoTriage.Gui
 
         private void BtnAnalyze_Click(object? sender, EventArgs e)
         {
+            PerformAnalysis();
+        }
+
+        private void PerformAnalysis()
+        {
             try
             {
                 // Read FULL log text without truncation
@@ -412,11 +490,24 @@ namespace AutoTriage.Gui
                 // Remove non-printable characters that can break matching (except tabs and newlines)
                 logText = new string(logText.Where(c => c == '\n' || c == '\t' || (c >= 32 && c < 127) || c >= 128).ToArray());
 
-                // Split into lines
-                string[] lines = logText.Split(new char[] { '\n' }, StringSplitOptions.None);
+                // Split into lines (handle both Windows \r\n and Unix \n line endings)
+                string[] lines = logText.Split(new string[] { "\r\n", "\n" }, StringSplitOptions.None);
 
                 // Run analysis
                 currentResult = analyzer.Analyze(lines, null);
+
+                // DIAGNOSTIC: Show analysis results
+                System.Diagnostics.Debug.WriteLine($"==== ANALYSIS COMPLETED ====");
+                System.Diagnostics.Debug.WriteLine($"Input lines array length: {lines.Length}");
+                System.Diagnostics.Debug.WriteLine($"currentResult.AllLines.Count: {currentResult.AllLines.Count}");
+                System.Diagnostics.Debug.WriteLine($"currentResult.Findings.Count: {currentResult.Findings.Count}");
+
+                // Show first 3 lines captured
+                for (int i = 0; i < Math.Min(3, currentResult.AllLines.Count); i++)
+                {
+                    var line = currentResult.AllLines[i];
+                    System.Diagnostics.Debug.WriteLine($"  AllLines[{i}] LineNum={line.LineNumber}, RawText='{line.RawText}'");
+                }
 
                 // Update status with detailed information
                 lblStatus.Text = string.Format("Parsed: {0} lines | All Lines Tracked: {1} | Findings: {2} | Critical: {3} | Error: {4} | Warning: {5} | Success: {6}",
@@ -427,9 +518,14 @@ namespace AutoTriage.Gui
                     currentResult.ErrorCount,
                     currentResult.WarningCount,
                     currentResult.SuccessCount);
+                lblStatus.ForeColor = Color.DarkSlateGray;  // Reset to normal color
 
                 // Apply filters and display
                 ApplyFiltersAndDisplay();
+
+                // Make log textbox read-only after analysis to prevent accidental edits
+                txtLogInput.ReadOnly = true;
+                txtLogInput.BackColor = Color.White;  // Keep white despite read-only
 
                 // Run validation (optional, for debugging)
                 analyzer.ValidateKeywordMatching();
@@ -442,10 +538,26 @@ namespace AutoTriage.Gui
 
         private void TxtKeywordFilter_TextChanged(object? sender, EventArgs e)
         {
+            System.Diagnostics.Debug.WriteLine($"==== TxtKeywordFilter_TextChanged ====");
+            System.Diagnostics.Debug.WriteLine($"Current filter text: '{txtKeywordFilter.Text}'");
+            System.Diagnostics.Debug.WriteLine($"currentResult is null: {currentResult == null}");
+
             // Re-apply filters without re-running analysis
             if (currentResult != null)
             {
+                System.Diagnostics.Debug.WriteLine($"currentResult.AllLines.Count: {currentResult.AllLines.Count}");
                 ApplyFiltersAndDisplay();
+            }
+            else
+            {
+                System.Diagnostics.Debug.WriteLine("currentResult is NULL - cannot filter!");
+
+                // Show helpful message if user tries to search without analyzing first
+                if (!string.IsNullOrWhiteSpace(txtKeywordFilter.Text) && !string.IsNullOrWhiteSpace(txtLogInput.Text))
+                {
+                    lblStatus.Text = "⚠ Please click 'Analyze Log' button first before searching";
+                    lblStatus.ForeColor = Color.DarkOrange;
+                }
             }
         }
 
@@ -511,6 +623,7 @@ namespace AutoTriage.Gui
         private void BtnClearAll_Click(object? sender, EventArgs e)
         {
             // Clear log input
+            txtLogInput.ReadOnly = false;  // Make editable for new log
             txtLogInput.Clear();
 
             // Clear results
@@ -531,7 +644,7 @@ namespace AutoTriage.Gui
             chkError.Checked = true;
             chkWarning.Checked = true;
             chkSuccess.Checked = true;
-            chkIncludeNonFindings.Checked = true;
+            chkNRC.Checked = true;
         }
 
         private void BtnDecoder_Click(object? sender, EventArgs e)
@@ -547,7 +660,7 @@ namespace AutoTriage.Gui
             }
         }
 
-        private void ChkIncludeNonFindings_CheckedChanged(object? sender, EventArgs e)
+        private void SeverityFilter_CheckedChanged(object? sender, EventArgs e)
         {
             if (currentResult != null)
             {
@@ -555,7 +668,7 @@ namespace AutoTriage.Gui
             }
         }
 
-        private void SeverityFilter_CheckedChanged(object? sender, EventArgs e)
+        private void NrcFilter_CheckedChanged(object? sender, EventArgs e)
         {
             if (currentResult != null)
             {
@@ -671,17 +784,60 @@ namespace AutoTriage.Gui
             {
                 int matchCount = 0;
 
+                System.Diagnostics.Debug.WriteLine($"Processing {currentResult.AllLines.Count} lines with keywords: [{string.Join(", ", keywords)}]");
+                System.Diagnostics.Debug.WriteLine($"Keyword count: {keywords.Length}");
+
+                // Check if any severity filters are selected
+                bool anySeveritySelected = chkCritical.Checked || chkError.Checked || 
+                                          chkWarning.Checked || chkSuccess.Checked;
+
+                System.Diagnostics.Debug.WriteLine($"Any severity selected: {anySeveritySelected}");
+                System.Diagnostics.Debug.WriteLine($"  Critical: {chkCritical.Checked}, Error: {chkError.Checked}, Warning: {chkWarning.Checked}, Success: {chkSuccess.Checked}");
+
+                // Debug: Show first few lines being searched
+                for (int debugIdx = 0; debugIdx < Math.Min(5, currentResult.AllLines.Count); debugIdx++)
+                {
+                    var debugLine = currentResult.AllLines[debugIdx];
+                    System.Diagnostics.Debug.WriteLine($"  Sample line {debugLine.LineNumber}: '{debugLine.RawText}' (Length: {(debugLine.RawText ?? "").Length})");
+                }
+
+                int totalMatches = 0;
+                int linesProcessed = 0;
+
                 foreach (var logLine in currentResult.AllLines)
                 {
+                    linesProcessed++;
+                    string rawText = logLine.RawText ?? "";
+
                     bool matches = keywords.Any(kw => 
-                        (logLine.RawText ?? "").IndexOf(kw, StringComparison.OrdinalIgnoreCase) >= 0);
+                        rawText.IndexOf(kw, StringComparison.OrdinalIgnoreCase) >= 0);
+
+                    // Debug: For first keyword, check each line
+                    if (linesProcessed <= 10 && keywords.Length > 0)
+                    {
+                        string firstKeyword = keywords[0];
+                        bool contains = rawText.IndexOf(firstKeyword, StringComparison.OrdinalIgnoreCase) >= 0;
+                        System.Diagnostics.Debug.WriteLine($"  Line {logLine.LineNumber}: Contains '{firstKeyword}'? {contains} | Text: '{(rawText.Length > 100 ? rawText.Substring(0, 100) + "..." : rawText)}'");
+                    }
+
+                    // Debug: Log matches for "soc" keyword specifically
+                    if (keywords.Any(k => k.Equals("soc", StringComparison.OrdinalIgnoreCase)) && 
+                        rawText.IndexOf("soc", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"  ✓ SOC MATCH on line {logLine.LineNumber}: '{rawText}'");
+                    }
 
                     if (matches)
                     {
-                        matchCount++;
+                        totalMatches++;
 
                         FindingSeverity severity = logLine.DetectedSeverity;
                         string code = logLine.IsFinding ? "FINDING" : "KEYWORD";
+
+                        // KEYWORD MODE: Show ALL keyword matches
+                        // Don't apply severity or NRC filters - user wants to see EVERY line with their keyword
+
+                        matchCount++;
 
                         Color rowColor = severity switch
                         {
@@ -693,7 +849,6 @@ namespace AutoTriage.Gui
                             _ => Color.White
                         };
 
-                        string rawText = logLine.RawText ?? "";
                         string lineText = SanitizeForGrid(rawText);
                         string timestamp = ExtractTimestamp(rawText);
 
@@ -709,7 +864,11 @@ namespace AutoTriage.Gui
                     }
                 }
 
-                System.Diagnostics.Debug.WriteLine($"Keyword matches: {matchCount}");
+                System.Diagnostics.Debug.WriteLine($"==== KEYWORD SEARCH COMPLETE ====");
+                System.Diagnostics.Debug.WriteLine($"Lines processed: {linesProcessed}");
+                System.Diagnostics.Debug.WriteLine($"Total matches: {totalMatches}");
+                System.Diagnostics.Debug.WriteLine($"Rows added to result list: {matchCount}");
+
                 lblStatus.Text = string.Format("Keyword Search: {0} lines scanned | {1} matches found | Keywords: [{2}]",
                     currentResult.AllLines.Count,
                     matchCount,
@@ -722,35 +881,8 @@ namespace AutoTriage.Gui
                 bool anySeveritySelected = chkCritical.Checked || chkError.Checked || 
                                       chkWarning.Checked || chkSuccess.Checked;
 
-                List<Finding> findingsToShow;
-
-                if (chkIncludeNonFindings.Checked)
-                {
-                    findingsToShow = currentResult.Findings.ToList();
-
-                    var nonFindings = currentResult.AllLines
-                        .Where(line => !line.IsFinding)
-                        .Select(line => new Finding
-                        {
-                            LineNumber = line.LineNumber,
-                            Severity = line.DetectedSeverity,
-                            LineText = (line.RawText ?? "").Trim(),
-                            Title = (line.RawText ?? "").Trim().Length > 80 ? 
-                                   (line.RawText ?? "").Trim().Substring(0, 77) + "..." : 
-                                   (line.RawText ?? "").Trim(),
-                            Code = "INFO",
-                            RuleId = $"LINE_{line.LineNumber}",
-                            Evidence = (line.RawText ?? "").Trim(),
-                            WhyItMatters = "Non-finding log line"
-                        });
-
-                    findingsToShow.AddRange(nonFindings);
-                    findingsToShow = findingsToShow.OrderBy(f => f.LineNumber).ToList();
-                }
-                else
-                {
-                    findingsToShow = currentResult.Findings.ToList();
-                }
+                // Show only findings (no non-findings)
+                List<Finding> findingsToShow = currentResult.Findings.ToList();
 
                 if (anySeveritySelected)
                 {
@@ -761,10 +893,11 @@ namespace AutoTriage.Gui
                         (chkSuccess.Checked && f.Severity == FindingSeverity.Success)
                     ).ToList();
                 }
-                else
+                else if (!chkNRC.Checked)
                 {
+                    // Only clear if both severity filters AND NRC filter are inactive
                     findingsToShow.Clear();
-                    lblStatus.Text = "No filters active. Select severity filters or enter keywords.";
+                    lblStatus.Text = "No filters active. Select severity filters, NRC filter, or enter keywords.";
                 }
 
                 System.Diagnostics.Debug.WriteLine($"Findings mode: {findingsToShow.Count} findings");
@@ -772,6 +905,12 @@ namespace AutoTriage.Gui
                 // Convert to ResultRow
                 foreach (var finding in findingsToShow)
                 {
+                    // Apply NRC code filter
+                    if (!ShouldShowBasedOnNrcFilter(finding.LineText ?? ""))
+                    {
+                        continue;  // Skip lines with filtered-out NRC codes
+                    }
+
                     Color rowColor = finding.Severity switch
                     {
                         FindingSeverity.Critical => Color.LightCoral,
@@ -803,6 +942,9 @@ namespace AutoTriage.Gui
 
         private string[] ParseKeywords(string keywordText)
         {
+            // Trim whitespace first
+            keywordText = keywordText?.Trim() ?? "";
+
             if (string.IsNullOrWhiteSpace(keywordText))
                 return Array.Empty<string>();
 
@@ -810,12 +952,47 @@ namespace AutoTriage.Gui
             char[] separators = { ',', ' ', ';', '\t', '\r', '\n' };
             var tokens = keywordText.Split(separators, StringSplitOptions.RemoveEmptyEntries);
 
-            // Trim and filter
+            // Trim and filter - remove any tokens that are just whitespace or single chars that might be artifacts
             return tokens
                 .Select(t => t.Trim())
-                .Where(t => !string.IsNullOrWhiteSpace(t))
+                .Where(t => !string.IsNullOrWhiteSpace(t) && t.Length > 0)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray();
+        }
+
+        /// <summary>
+        /// Checks if a line should be shown based on NRC filter
+        /// When NRC is checked: Shows lines containing NRC patterns
+        /// When NRC is unchecked and no severities selected: Hides all
+        /// When NRC is unchecked and severities selected: Shows non-NRC lines
+        /// </summary>
+        private bool ShouldShowBasedOnNrcFilter(string lineText)
+        {
+            if (string.IsNullOrEmpty(lineText))
+                return false;
+
+            // Check if any severity filters are active
+            bool anySeveritySelected = chkCritical.Checked || chkError.Checked || 
+                                      chkWarning.Checked || chkSuccess.Checked;
+
+            // Simplified NRC detection (no regex to avoid runtime issues)
+            // Look for explicit "NRC" or "Negative Response" mentions
+            bool containsNrc = lineText.Contains("NRC", StringComparison.OrdinalIgnoreCase) ||
+                              lineText.Contains("Negative Response", StringComparison.OrdinalIgnoreCase);
+
+            // If NRC is checked and no severity filters are active, only show NRC lines
+            if (chkNRC.Checked && !anySeveritySelected)
+            {
+                return containsNrc;
+            }
+
+            // If NRC is unchecked, hide NRC lines
+            if (!chkNRC.Checked && containsNrc)
+            {
+                return false;
+            }
+
+            return true;  // Show the line by default
         }
 
         private string ExtractTimestamp(string logLine)
@@ -974,5 +1151,93 @@ namespace AutoTriage.Gui
                 MessageBox.Show($"Error running tests: {ex.Message}", "Test Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
+
+        #region Simple Search (Wireshark-style)
+
+        /// <summary>
+        /// Finds next occurrence of search text (like Wireshark Ctrl+F)
+        /// </summary>
+        private void FindNextInLog(string searchText)
+        {
+            if (string.IsNullOrEmpty(searchText) || string.IsNullOrEmpty(txtLogInput.Text))
+                return;
+
+            int startIndex = txtLogInput.SelectionStart + txtLogInput.SelectionLength;
+
+            if (startIndex >= txtLogInput.Text.Length)
+                startIndex = 0; // Wrap around
+
+            int index = txtLogInput.Text.IndexOf(searchText, startIndex, StringComparison.OrdinalIgnoreCase);
+
+            if (index >= 0)
+            {
+                txtLogInput.Focus();  // Must focus before selecting to make ScrollToCaret work
+                txtLogInput.SelectionStart = index;
+                txtLogInput.SelectionLength = searchText.Length;
+                txtLogInput.ScrollToCaret();
+                lblStatus.Text = $"Found '{searchText}' at position {index}";
+            }
+            else
+            {
+                // Try from beginning (wrap)
+                index = txtLogInput.Text.IndexOf(searchText, 0, StringComparison.OrdinalIgnoreCase);
+                if (index >= 0)
+                {
+                    txtLogInput.Focus();  // Must focus before selecting to make ScrollToCaret work
+                    txtLogInput.SelectionStart = index;
+                    txtLogInput.SelectionLength = searchText.Length;
+                    txtLogInput.ScrollToCaret();
+                    lblStatus.Text = $"Search wrapped - found at position {index}";
+                }
+                else
+                {
+                    lblStatus.Text = $"'{searchText}' not found";
+                }
+            }
+        }
+
+        /// <summary>
+        /// Finds previous occurrence of search text
+        /// </summary>
+        private void FindPrevInLog(string searchText)
+        {
+            if (string.IsNullOrEmpty(searchText) || string.IsNullOrEmpty(txtLogInput.Text))
+                return;
+
+            int startIndex = txtLogInput.SelectionStart - 1;
+
+            if (startIndex < 0)
+                startIndex = txtLogInput.Text.Length; // Wrap to end
+
+            int index = txtLogInput.Text.LastIndexOf(searchText, startIndex, StringComparison.OrdinalIgnoreCase);
+
+            if (index >= 0)
+            {
+                txtLogInput.Focus();  // Must focus before selecting to make ScrollToCaret work
+                txtLogInput.SelectionStart = index;
+                txtLogInput.SelectionLength = searchText.Length;
+                txtLogInput.ScrollToCaret();
+                lblStatus.Text = $"Found '{searchText}' at position {index}";
+            }
+            else
+            {
+                // Try from end (wrap)
+                index = txtLogInput.Text.LastIndexOf(searchText, StringComparison.OrdinalIgnoreCase);
+                if (index >= 0)
+                {
+                    txtLogInput.Focus();  // Must focus before selecting to make ScrollToCaret work
+                    txtLogInput.SelectionStart = index;
+                    txtLogInput.SelectionLength = searchText.Length;
+                    txtLogInput.ScrollToCaret();
+                    lblStatus.Text = $"Search wrapped - found at position {index}";
+                }
+                else
+                {
+                    lblStatus.Text = $"'{searchText}' not found";
+                }
+            }
+        }
+
+        #endregion
     }
 }
