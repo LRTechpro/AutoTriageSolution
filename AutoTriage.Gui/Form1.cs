@@ -42,6 +42,8 @@ namespace AutoTriage.Gui
         private Label lblStatus = null!;
         private Label lblLoadedFile = null!;
 
+        private string[] _rawLines = Array.Empty<string>();
+
         public Form1()
         {
             analyzer = new LogAnalyzer();
@@ -385,8 +387,9 @@ namespace AutoTriage.Gui
                 // Remove non-printable characters that can break matching (except tabs and newlines)
                 logText = new string(logText.Where(c => c == '\n' || c == '\t' || (c >= 32 && c < 127) || c >= 128).ToArray());
 
-                // Split into lines
+                // Split into lines and STORE IN FIELD
                 string[] lines = logText.Split(new char[] { '\n' }, StringSplitOptions.None);
+                _rawLines = lines;
 
                 // Run analysis
                 currentResult = analyzer.Analyze(lines, null);
