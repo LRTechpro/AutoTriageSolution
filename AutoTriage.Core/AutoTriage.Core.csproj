@@ -41,6 +41,12 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="Decoding\DecodedPayload.cs" />
+    <Compile Include="Decoding\AutomotivePayloadDecoder.cs" />
+    <Compile Include="Decoding\DecoderIntegration.cs" />
+    <Compile Include="Decoding\DecoderTestHarness.cs" />
+    <Compile Include="Decoding\IsoTpResult.cs" />
+    <Compile Include="Decoding\OemDictionaryExample.cs" />
     <Compile Include="Domain\AnalysisResult.cs" />
     <Compile Include="Domain\CriticalRuleSet.cs" />
     <Compile Include="Domain\Finding.cs" />

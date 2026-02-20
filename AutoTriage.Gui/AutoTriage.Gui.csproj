@@ -1,15 +1,19 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <OutputType>WinExe</OutputType>
-    <TargetFramework>net10.0-windows</TargetFramework>
+	<Nullable>enable</Nullable>
+	<OutputType>WinExe</OutputType>
+	<TargetFramework>net8.0-windows</TargetFramework>
     <Nullable>enable</Nullable>
     <UseWindowsForms>true</UseWindowsForms>
-    <ImplicitUsings>enable</ImplicitUsings>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <!-- <ApplicationManifest>app.manifest</ApplicationManifest> -->
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\AutoTriage.Core\AutoTriage.Core.csproj" />
+    <ProjectReference Include="..\AutoTriage.Models\AutoTriage.Models.csproj" />
+    <ProjectReference Include="..\AutoTriage.Analysis\AutoTriage.Analysis.csproj" />
   </ItemGroup>
 
 </Project>
