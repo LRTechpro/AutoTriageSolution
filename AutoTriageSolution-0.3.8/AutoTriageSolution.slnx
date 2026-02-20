@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="AutoTriage.Core/AutoTriage.Core.csproj" Id="fa8feb16-77fc-4b06-afd9-19954a7edca6" />
+  <Project Path="AutoTriage.Gui/AutoTriage.Gui.csproj" />
+</Solution>

@@ -1,0 +1,15 @@
+[0001] System boot starting...
+[0002] Initializing power management
+[0003] SOC: 75%
+[0004] Checking battery status
+[0005] Battery SOC low: 62%
+[0006] Voltage regulator initialized
+[0007] LOW_SOC detected - entering power save mode
+[0008] Thermal sensor OK
+[0009] erase_fail: flash erase failed
+[0010] Retrying erase operation...
+[0011] Flash verification in progress
+[0012] SUCCESS Programming completed successfully
+[0013] System ready
+[0014] Configuration loaded
+[0015] Network stack initialized

@@ -1,0 +1,12 @@
+[0001] System boot starting...
+[0002] Initializing power management
+[0003] SOC: 75%
+[0004] Battery voltage: 4.2V
+[0005] ERROR WDT RESET occurred
+[0006] RESET REASON: WATCHDOG
+[0007] Thermal sensor OK
+[0008] Low battery SOC detected
+[0009] Configuration loaded
+[0010] WATCHDOG timer configured: 30s
+[0011] Network interface ready
+[0012] SUCCESS System initialization complete
